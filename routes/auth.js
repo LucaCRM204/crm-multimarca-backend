@@ -1,9 +1,11 @@
 // routes/auth.js
+// routes/auth.js
 const express = require('express');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcryptjs');         // <- recuerda que cambiamos a bcryptjs
 const jwt = require('jsonwebtoken');
-const pool = require('../db');
+const pool = require('../db');              // <- ESTE require
 const router = express.Router();
+
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
