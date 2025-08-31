@@ -1,3 +1,4 @@
+// server.js — consolidado y sin duplicados
 const express = require('express');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -5,42 +6,41 @@ const cors = require('cors');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
-const authRouter  = require('./routes/auth');
-const leadsRouter = require('./routes/leads');
-const usersRouter = require('./routes/users');   // <— NUEVO
-
-// Con /api (llamados directos)
-app.use('/api/auth',  authRouter);
-app.use('/api/leads', leadsRouter);
-app.use('/api/users', usersRouter);              // <— NUEVO
-
-// Sin /api (porque Vercel quita /api en el rewrite)
-app.use('/auth',  authRouter);
-app.use('/leads', leadsRouter);
-app.use('/users', usersRouter);                  // <— NUEVO
 
 const app = express();
 
+// Seguridad y parsers
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 app.use(compression());
 app.use(morgan('dev'));
 
+// CORS
 const origins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
 app.use(cors({ origin: origins.length ? origins : true, credentials: true }));
 
-// ===== Rutas =====
+// ===== Importar routers UNA SOLA VEZ =====
 const authRouter  = require('./routes/auth');
 const leadsRouter = require('./routes/leads');
+let usersRouter;
+try {
+  usersRouter = require('./routes/users'); // si aún no existe, el try-catch evita crashear
+} catch (e) {
+  usersRouter = null;
+}
 
-// Con prefijo /api (por si en algún momento llamás directo)
+// ===== Montar con y sin /api (Vercel quita /api en el rewrite) =====
 app.use('/api/auth',  authRouter);
-app.use('/api/leads', leadsRouter);
+app.use('/auth',      authRouter);
 
-// SIN prefijo /api (para el rewrite de Vercel que quita /api)
-app.use('/auth',  authRouter);
-app.use('/leads', leadsRouter);
+app.use('/api/leads', leadsRouter);
+app.use('/leads',     leadsRouter);
+
+if (usersRouter) {
+  app.use('/api/users', usersRouter);
+  app.use('/users',     usersRouter);
+}
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
