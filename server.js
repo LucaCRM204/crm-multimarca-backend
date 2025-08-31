@@ -5,6 +5,19 @@ const cors = require('cors');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
+const authRouter  = require('./routes/auth');
+const leadsRouter = require('./routes/leads');
+const usersRouter = require('./routes/users');   // <— NUEVO
+
+// Con /api (llamados directos)
+app.use('/api/auth',  authRouter);
+app.use('/api/leads', leadsRouter);
+app.use('/api/users', usersRouter);              // <— NUEVO
+
+// Sin /api (porque Vercel quita /api en el rewrite)
+app.use('/auth',  authRouter);
+app.use('/leads', leadsRouter);
+app.use('/users', usersRouter);                  // <— NUEVO
 
 const app = express();
 
