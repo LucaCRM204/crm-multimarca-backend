@@ -18,9 +18,9 @@ app.use(morgan('dev'));
 const origins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
 app.use(cors({ origin: origins.length ? origins : true, credentials: true }));
 
-// 👉 MONTA las rutas
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/leads', require('./routes/leads'));
+app.use('/api/auth', require('./routes/auth'));   // ya lo tenés
+app.use('/api/users', require('./routes/users')); // <— NUEVO
+app.use('/api/leads', require('./routes/leads')); // <— asegurar que esté
 
 // Health
 app.get('/api/health', (_req, res)=>res.json({ ok:true, ts:new Date().toISOString() }));
