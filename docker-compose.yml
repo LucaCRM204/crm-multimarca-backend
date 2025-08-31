@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: alluma_crm
+      MYSQL_USER: alluma_app
+      MYSQL_PASSWORD: AllumaCRM2025!
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DB_HOST: mysql
+      DB_USER: alluma_app
+      DB_PASSWORD: AllumaCRM2025!
+      DB_NAME: alluma_crm
+      JWT_SECRET: your-jwt-secret
+    depends_on:
+      - mysql
+
+volumes:
+  mysql_data:
