@@ -10,47 +10,43 @@ router.post('/zapier', async (req, res) => {
       return res.status(401).json({ error: 'No autorizado' });
     }
     
-    console.log('Headers recibidos:', req.headers);
-    console.log('Body tipo:', typeof req.body);
-    console.log('Body completo:', req.body);
-    
-    // Intentar parsear si viene como string
-    let datosLead = req.body;
-    
-    // Si el body es un string, intentar parsearlo
-    if (typeof req.body === 'string') {
-      try {
-        datosLead = JSON.parse(req.body);
-      } catch (e) {
-        console.log('No se pudo parsear como JSON');
-      }
-    }
-    
-    // Si tiene la propiedad data, usar esa
-    if (datosLead.data) {
-      datosLead = datosLead.data;
-    }
-    
-    console.log('Datos procesados:', datosLead);
-    
-    // Extraer datos con diferentes posibles nombres
-    const nombre = datosLead.nombre || datosLead.Nombre || 'Sin nombre';
-    const telefono = datosLead.telefono || datosLead.Telefono || '';
-    const modelo = datosLead.modelo || datosLead.Modelo || 'Consultar';
-    const formaPago = datosLead.formaPago || datosLead.formapago || datosLead.Formapago || 'Consultar';
-    const fuente = datosLead.fuente || datosLead.Fuente || 'facebook';
-    const estado = datosLead.estado || 'nuevo';
-    const notas = datosLead.notas || datosLead.Origen || '';
-    
-    console.log('Valores finales para insertar:', {
+    const {
       nombre,
       telefono,
+      email,
       modelo,
       formaPago,
+      formapago,
       fuente,
       estado,
       notas
-    });
+    } = req.body;
+    
+    // Validar que al menos tenga nombre Y tel?fono
+    if (!nombre || !telefono) {
+      console.log('Lead rechazado - Falta nombre o tel?fono:', { nombre, telefono });
+      return res.status(400).json({ 
+        error: 'Lead incompleto - se requiere nombre y tel?fono',
+        datosRecibidos: { nombre, telefono }
+      });
+    }
+    
+    // Si no hay informaci?n ?til adicional, rechazar
+    if (!email && !modelo && !formaPago && !formapago) {
+      console.log('Lead rechazado - Sin informaci?n adicional ?til');
+      return res.status(400).json({ 
+        error: 'Lead sin informaci?n suficiente para procesar'
+      });
+    }
+    
+    // Procesar datos v?lidos
+    const nombreFinal = nombre;
+    const telefonoFinal = telefono;
+    const modeloFinal = modelo || 'Consultar';
+    const formaPagoFinal = formaPago || formapago || 'Consultar';
+    const fuenteFinal = fuente || 'facebook';
+    const estadoFinal = estado || 'nuevo';
+    const notasFinal = notas || '';
     
     // Asignaci?n autom?tica
     let assigned_to = null;
@@ -63,23 +59,28 @@ router.post('/zapier', async (req, res) => {
       assigned_to = vendedores[randomIndex].id;
     }
     
-    // Crear lead
+    // Crear lead solo si tiene datos v?lidos
     const [result] = await pool.execute(
       `INSERT INTO leads (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to]
+      [nombreFinal, telefonoFinal, modeloFinal, formaPagoFinal, estadoFinal, fuenteFinal, notasFinal, assigned_to]
     );
+    
+    console.log('Lead creado exitosamente:', { 
+      id: result.insertId, 
+      nombre: nombreFinal, 
+      telefono: telefonoFinal 
+    });
     
     res.json({ 
       ok: true, 
       message: 'Lead creado exitosamente',
-      leadId: result.insertId,
-      recibido: datosLead
+      leadId: result.insertId
     });
     
   } catch (error) {
     console.error('Error webhook Zapier:', error);
-    res.status(500).json({ error: 'Error al procesar lead: ' + error.message });
+    res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
 
