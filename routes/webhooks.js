@@ -10,16 +10,25 @@ router.post('/zapier', async (req, res) => {
       return res.status(401).json({ error: 'No autorizado' });
     }
     
+    // Extraer datos y manejar valores undefined
     const {
-      nombre,
-      telefono,
-      email,
+      nombre = 'Sin nombre',
+      telefono = '',
+      email = '',
       modelo = 'Consultar',
       formaPago = 'Consultar',
       fuente = 'facebook',
       estado = 'nuevo',
       notas = 'Lead de Facebook Ads'
     } = req.body;
+    
+    // Limpiar valores - convertir undefined/null/"No data" a valores v?lidos
+    const nombreLimpio = nombre || 'Sin nombre';
+    const telefonoLimpio = telefono || '';
+    const modeloLimpio = (modelo === 'No data' || !modelo) ? 'Consultar' : modelo;
+    const formaPagoLimpio = formaPago || 'Consultar';
+    const fuenteLimpia = fuente || 'facebook';
+    const notasLimpias = notas || '';
     
     // Asignaci?n autom?tica a vendedor activo
     let assigned_to = null;
@@ -32,11 +41,20 @@ router.post('/zapier', async (req, res) => {
       assigned_to = vendedores[randomIndex].id;
     }
     
-    // Crear lead
+    // Crear lead con valores limpios
     const [result] = await pool.execute(
       `INSERT INTO leads (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [nombre, telefono || '', modelo, formaPago, estado, fuente, notas, assigned_to]
+      [
+        nombreLimpio, 
+        telefonoLimpio, 
+        modeloLimpio, 
+        formaPagoLimpio, 
+        estado, 
+        fuenteLimpia, 
+        notasLimpias, 
+        assigned_to
+      ]
     );
     
     res.json({ 
