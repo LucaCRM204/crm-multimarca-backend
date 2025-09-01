@@ -3,15 +3,16 @@ const router = express.Router();
 const pool = require('../db');
 const jwt = require('jsonwebtoken');
 
-// Middleware JWT personalizado
+// Middleware JWT que lee cookies Y headers (igual que requireAuth en auth.js)
 const jwtAuth = (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Buscar token en cookie O en header Authorization
+    const token = req.cookies?.session || (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+    
+    if (!token) {
       return res.status(401).json({ ok: false, error: 'Token requerido' });
     }
     
-    const token = authHeader.substring(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // Tendrá uid, role, id, email
     next();
@@ -86,13 +87,20 @@ router.post('/', jwtAuth, async (req, res) => {
 router.put('/:id', jwtAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, telefono, modelo, fuente, formaPago } = req.body;
+    const { nombre, telefono, modelo, fuente, formaPago, estado, vendedor } = req.body;
     
     const [result] = await pool.execute(
       `UPDATE leads 
-       SET nombre = ?, telefono = ?, modelo = ?, fuente = ?, formaPago = ?, updated_at = NOW()
+       SET nombre = COALESCE(?, nombre), 
+           telefono = COALESCE(?, telefono), 
+           modelo = COALESCE(?, modelo), 
+           fuente = COALESCE(?, fuente), 
+           formaPago = COALESCE(?, formaPago),
+           estado = COALESCE(?, estado),
+           assigned_to = COALESCE(?, assigned_to),
+           updated_at = NOW()
        WHERE id = ?`,
-      [nombre, telefono, modelo, fuente, formaPago, id]
+      [nombre, telefono, modelo, fuente, formaPago, estado, vendedor, id]
     );
     
     if (result.affectedRows === 0) {
