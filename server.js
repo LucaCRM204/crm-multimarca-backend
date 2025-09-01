@@ -6,6 +6,7 @@ const cors = require('cors');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
+import './integrations/zapier/metaWebhookRelay.js';
 
 const app = express();
 

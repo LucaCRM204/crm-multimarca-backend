@@ -35,3 +35,29 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
+const intakeAuth = require('../middleware/intakeAuth');
+
+router.post('/intake', intakeAuth, async (req,res)=>{
+  try{
+    const b = req.body || {};
+    const nombre    = (b.nombre && String(b.nombre).trim()) || 'Sin nombre';
+    const telefono  = (b.telefono && String(b.telefono).trim()) || '';
+    const modelo    = (b.modelo && String(b.modelo).trim()) || '';
+    const fuente    = (b.fuente && String(b.fuente).trim()) || 'zapier';
+    const formaPago = (b.formaPago && String(b.formaPago).trim()) || '';
+    const notas     = (b.notas && String(b.notas).trim()) || '';
+    const estado    = (b.estado && String(b.estado).trim()) || 'nuevo';
+    const assigned  = b.vendedor ?? null;
+
+    await pool.query(
+      `INSERT INTO leads (nombre, telefono, modelo, fuente, formaPago, notas, estado, assigned_to)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [nombre, telefono, modelo, fuente, formaPago, notas, estado, assigned]
+    );
+
+    res.json({ ok:true, provider: req.provider });
+  }catch(e){
+    console.error('[INTAKE ERROR]', e);
+    res.status(500).json({ error: 'Intake failed' });
+  }
+});
