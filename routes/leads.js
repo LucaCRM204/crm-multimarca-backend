@@ -1,5 +1,3 @@
-# Crear una versión corregida de leads.js
-@'
 const router = require('express').Router();
 const pool = require('../db');
 const { jwtAuth } = require('../middleware/auth');
@@ -46,7 +44,7 @@ router.post('/', jwtAuth, async (req, res) => {
       vendedor = null
     } = req.body;
 
-    // Asignación automática si no hay vendedor
+    // Asignaci?n autom?tica si no hay vendedor
     let assigned_to = vendedor;
     if (!assigned_to) {
       const [vendedores] = await pool.execute(
@@ -129,4 +127,3 @@ router.delete('/:id', jwtAuth, async (req, res) => {
 });
 
 module.exports = router;
-'@ | Out-File -FilePath routes/leads.js -Encoding UTF8
