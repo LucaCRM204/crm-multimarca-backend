@@ -10,9 +10,12 @@ router.post('/zapier', async (req, res) => {
       return res.status(401).json({ error: 'No autorizado' });
     }
     
-    console.log('Datos recibidos de Zapier:', req.body);
+    console.log('Body completo recibido:', JSON.stringify(req.body, null, 2));
     
-    // Extraer datos del body
+    // Los datos vienen dentro del objeto 'data' cuando Zapier los env?a
+    const datosLead = req.body.data || req.body;
+    
+    // Extraer datos
     const {
       nombre,
       telefono,
@@ -22,19 +25,20 @@ router.post('/zapier', async (req, res) => {
       formapago,
       fuente,
       estado,
-      notas
-    } = req.body;
+      notas,
+      Origen
+    } = datosLead;
     
-    // Usar los valores que vienen, con fallbacks solo si est?n vac?os
+    // Usar los valores que vienen
     const nombreFinal = nombre || 'Sin nombre';
     const telefonoFinal = telefono || '';
     const modeloFinal = modelo || 'Consultar';
     const formaPagoFinal = formaPago || formapago || 'Consultar';
     const fuenteFinal = fuente || 'facebook';
     const estadoFinal = estado || 'nuevo';
-    const notasFinal = notas || '';
+    const notasFinal = notas || Origen || '';
     
-    // Asignaci?n autom?tica a vendedor activo
+    // Asignaci?n autom?tica
     let assigned_to = null;
     const [vendedores] = await pool.execute(
       'SELECT id FROM users WHERE role = ? AND active = 1',
@@ -45,7 +49,7 @@ router.post('/zapier', async (req, res) => {
       assigned_to = vendedores[randomIndex].id;
     }
     
-    console.log('Insertando lead:', {
+    console.log('Insertando lead con datos:', {
       nombre: nombreFinal,
       telefono: telefonoFinal,
       modelo: modeloFinal,
@@ -75,7 +79,7 @@ router.post('/zapier', async (req, res) => {
     
   } catch (error) {
     console.error('Error webhook Zapier:', error);
-    res.status(500).json({ error: 'Error al procesar lead' });
+    res.status(500).json({ error: 'Error al procesar lead: ' + error.message });
   }
 });
 
