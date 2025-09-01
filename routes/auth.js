@@ -19,37 +19,43 @@ function requireAuth(req, res, next) {
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'missing_fields' });
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'missing_fields' });
 
-  const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
-  const user = rows[0];
-  if (!user || !user.active) return res.status(401).json({ error: 'Credenciales inválidas' });
+    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+    const user = rows[0];
+    if (!user || !user.active) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-  const token = jwt.sign(
-    { uid: user.id, role: user.role, id: user.id, email: user.email },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-  );
+    const token = jwt.sign(
+      { uid: user.id, role: user.role, id: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
 
-  res.cookie('session', token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'none',
-    path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000
-  });
+    res.cookie('session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
 
-  // CAMBIO PRINCIPAL: Devolver también el token en el JSON
-  res.json({ ok: true, token: token });
+    // Devolver también el token en el JSON para compatibilidad con Bearer tokens
+    res.json({ ok: true, token: token });
+    
+  } catch (error) {
+    console.error('Error en login:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
 });
 
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ id: req.user.uid, role: req.user.role });
+  res.json({ id: req.user.uid, role: req.user.role, email: req.user.email });
 });
 
 // POST /api/auth/logout

@@ -12,7 +12,6 @@ const jwtAuth = (req, res, next) => {
     }
     
     const token = authHeader.substring(7);
-    // Usar la misma clave que auth.js
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // Tendrá uid, role, id, email
     next();
