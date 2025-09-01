@@ -44,6 +44,15 @@ router.post('/', authenticateToken, async (req, res) => {
       vendedor = null
     } = req.body;
 
+    // Incluir infoUsado y entrega en las notas si vienen
+    let notasCompletas = notas;
+    if (infoUsado) {
+      notasCompletas += `\nInfo usado: ${infoUsado}`;
+    }
+    if (entrega) {
+      notasCompletas += `\nEntrega usado: Si`;
+    }
+
     // Asignacion automatica si no hay vendedor
     let assigned_to = vendedor;
     if (!assigned_to) {
@@ -58,9 +67,9 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const [result] = await pool.execute(
-      `INSERT INTO leads (nombre, telefono, modelo, formaPago, infoUsado, entrega, fecha, estado, fuente, notas, assigned_to, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [nombre, telefono, modelo, formaPago, infoUsado, entrega ? 1 : 0, fecha, estado, fuente, notas, assigned_to]
+      `INSERT INTO leads (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [nombre, telefono, modelo, formaPago, estado, fuente, notasCompletas, assigned_to]
     );
 
     const [newLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
@@ -77,8 +86,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
     
-    const allowedFields = ['nombre', 'telefono', 'modelo', 'formaPago', 'infoUsado', 
-                          'entrega', 'fecha', 'estado', 'fuente', 'notas', 'assigned_to', 'vendedor'];
+    const allowedFields = ['nombre', 'telefono', 'modelo', 'formaPago', 'estado', 'fuente', 'notas', 'assigned_to', 'vendedor'];
     
     const setClause = [];
     const values = [];
