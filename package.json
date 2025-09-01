@@ -12,6 +12,7 @@
     "build": "echo 'No build step required for Node.js backend'"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.6",
@@ -22,7 +23,7 @@
     "helmet": "^7.0.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "mysql2": "^3.6.0"
+    "mysql2": "^3.14.4"
   },
   "devDependencies": {
     "jest": "^29.6.2",
@@ -40,5 +41,13 @@
     "alluma"
   ],
   "author": "Alluma Publicidad",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LucaCRM204/alluma-crm-backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LucaCRM204/alluma-crm-backend/issues"
+  },
+  "homepage": "https://github.com/LucaCRM204/alluma-crm-backend#readme"
 }
