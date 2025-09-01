@@ -7,6 +7,22 @@ const compression = require('compression');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 import './integrations/zapier/metaWebhookRelay.js';
+const express = require("express");
+const metaWebhookRouter = require("./integrations/zapier/metaWebhookRelay");
+
+const app = express();
+app.use(express.json());
+
+// health
+app.get("/health", (_, res) => res.send("ok"));
+
+// monta el webhook Meta
+app.use("/meta", metaWebhookRouter);
+
+// ... tus rutas existentes
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`API on :${PORT}`));
 
 const app = express();
 

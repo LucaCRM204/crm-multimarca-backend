@@ -1,21 +1,33 @@
-﻿import "dotenv/config";
-import express from "express";
-const { PORT = 3000, META_VERIFY_TOKEN, ZAPIER_WEBHOOK_URL, SHARED_SECRET } = process.env;
+// integrations/zapier/metaWebhookRelay.js
+const express = require("express");
+
+const { META_VERIFY_TOKEN, ZAPIER_WEBHOOK_URL, SHARED_SECRET } = process.env;
 if (!ZAPIER_WEBHOOK_URL) throw new Error("ZAPIER_WEBHOOK_URL is required");
-const app = express();
-app.use(express.json({ limit: "1mb" }));
-app.get("/meta/webhook", (req, res) => {
-  const mode = req.query["hub.mode"]; const token = req.query["hub.verify_token"]; const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === META_VERIFY_TOKEN) { return res.status(200).send(challenge); }
+
+const router = express.Router();
+router.use(express.json({ limit: "1mb" }));
+
+// GET /meta/webhook (verificación Meta)
+router.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === META_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
   return res.sendStatus(403);
 });
-app.post("/meta/webhook", async (req, res) => {
+
+// POST /meta/webhook (eventos leadgen)
+router.post("/webhook", async (req, res) => {
   try {
     if (req.body?.object !== "page") return res.sendStatus(204);
+
     const promises = [];
     for (const entry of req.body.entry || []) {
       for (const change of entry.changes || []) {
         if (change.field !== "leadgen") continue;
+
         const normalized = {
           source: "meta",
           meta: {
@@ -26,15 +38,22 @@ app.post("/meta/webhook", async (req, res) => {
             ad_id: change.value?.ad_id,
             created_time: change.value?.created_time,
           },
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         };
-        promises.push(fetch(ZAPIER_WEBHOOK_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(SHARED_SECRET ? { "X-Shared-Secret": SHARED_SECRET } : {}) },
-          body: JSON.stringify(normalized)
-        }));
+
+        promises.push(
+          fetch(ZAPIER_WEBHOOK_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(SHARED_SECRET ? { "X-Shared-Secret": SHARED_SECRET } : {}),
+            },
+            body: JSON.stringify(normalized),
+          })
+        );
       }
     }
+
     await Promise.all(promises);
     return res.sendStatus(200);
   } catch (e) {
@@ -42,4 +61,5 @@ app.post("/meta/webhook", async (req, res) => {
     return res.sendStatus(500);
   }
 });
-app.listen(PORT, () => { console.log(`[metaRelay] listening on :${PORT}`); });
+
+module.exports = router;
