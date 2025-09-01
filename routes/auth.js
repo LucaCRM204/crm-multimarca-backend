@@ -44,8 +44,19 @@ router.post('/login', async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    // Devolver también el token en el JSON para compatibilidad con Bearer tokens
-    res.json({ ok: true, token: token });
+    // Devolver token Y datos del usuario
+    res.json({ 
+      ok: true, 
+      token: token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name || user.email.split('@')[0],
+        role: user.role,
+        active: user.active,
+        reportsTo: user.reportsTo || null
+      }
+    });
     
   } catch (error) {
     console.error('Error en login:', error);
