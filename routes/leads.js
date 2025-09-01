@@ -1,9 +1,9 @@
 const router = require('express').Router();
 const pool = require('../db');
-const { jwtAuth } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 // GET todos los leads
-router.get('/', jwtAuth, async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const [leads] = await pool.execute('SELECT * FROM leads ORDER BY created_at DESC');
     res.json({ ok: true, leads });
@@ -14,7 +14,7 @@ router.get('/', jwtAuth, async (req, res) => {
 });
 
 // GET un lead
-router.get('/:id', jwtAuth, async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const [leads] = await pool.execute('SELECT * FROM leads WHERE id = ?', [req.params.id]);
     if (leads.length === 0) {
@@ -28,7 +28,7 @@ router.get('/:id', jwtAuth, async (req, res) => {
 });
 
 // POST crear lead
-router.post('/', jwtAuth, async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   try {
     const {
       nombre,
@@ -44,7 +44,7 @@ router.post('/', jwtAuth, async (req, res) => {
       vendedor = null
     } = req.body;
 
-    // Asignaci?n autom?tica si no hay vendedor
+    // Asignacion automatica si no hay vendedor
     let assigned_to = vendedor;
     if (!assigned_to) {
       const [vendedores] = await pool.execute(
@@ -52,7 +52,6 @@ router.post('/', jwtAuth, async (req, res) => {
         ['vendedor']
       );
       if (vendedores.length > 0) {
-        // Round-robin simple
         const randomIndex = Math.floor(Math.random() * vendedores.length);
         assigned_to = vendedores[randomIndex].id;
       }
@@ -73,12 +72,11 @@ router.post('/', jwtAuth, async (req, res) => {
 });
 
 // PUT actualizar lead
-router.put('/:id', jwtAuth, async (req, res) => {
+router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
     
-    // Campos permitidos para actualizar
     const allowedFields = ['nombre', 'telefono', 'modelo', 'formaPago', 'infoUsado', 
                           'entrega', 'fecha', 'estado', 'fuente', 'notas', 'assigned_to', 'vendedor'];
     
@@ -86,12 +84,10 @@ router.put('/:id', jwtAuth, async (req, res) => {
     const values = [];
     
     for (const [key, value] of Object.entries(updates)) {
-      // Mapear vendedor a assigned_to
       const fieldName = key === 'vendedor' ? 'assigned_to' : key;
       
       if (allowedFields.includes(key)) {
         setClause.push(`${fieldName} = ?`);
-        // Convertir undefined a null para SQL
         values.push(value === undefined ? null : value);
       }
     }
@@ -116,7 +112,7 @@ router.put('/:id', jwtAuth, async (req, res) => {
 });
 
 // DELETE eliminar lead
-router.delete('/:id', jwtAuth, async (req, res) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     await pool.execute('DELETE FROM leads WHERE id = ?', [req.params.id]);
     res.json({ ok: true, message: 'Lead eliminado' });
