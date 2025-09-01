@@ -10,25 +10,29 @@ router.post('/zapier', async (req, res) => {
       return res.status(401).json({ error: 'No autorizado' });
     }
     
-    // Extraer datos y manejar valores undefined
+    console.log('Datos recibidos de Zapier:', req.body);
+    
+    // Extraer datos del body
     const {
-      nombre = 'Sin nombre',
-      telefono = '',
-      email = '',
-      modelo = 'Consultar',
-      formaPago = 'Consultar',
-      fuente = 'facebook',
-      estado = 'nuevo',
-      notas = 'Lead de Facebook Ads'
+      nombre,
+      telefono,
+      email,
+      modelo,
+      formaPago,
+      formapago,
+      fuente,
+      estado,
+      notas
     } = req.body;
     
-    // Limpiar valores - convertir undefined/null/"No data" a valores v?lidos
-    const nombreLimpio = nombre || 'Sin nombre';
-    const telefonoLimpio = telefono || '';
-    const modeloLimpio = (modelo === 'No data' || !modelo) ? 'Consultar' : modelo;
-    const formaPagoLimpio = formaPago || 'Consultar';
-    const fuenteLimpia = fuente || 'facebook';
-    const notasLimpias = notas || '';
+    // Usar los valores que vienen, con fallbacks solo si est?n vac?os
+    const nombreFinal = nombre || 'Sin nombre';
+    const telefonoFinal = telefono || '';
+    const modeloFinal = modelo || 'Consultar';
+    const formaPagoFinal = formaPago || formapago || 'Consultar';
+    const fuenteFinal = fuente || 'facebook';
+    const estadoFinal = estado || 'nuevo';
+    const notasFinal = notas || '';
     
     // Asignaci?n autom?tica a vendedor activo
     let assigned_to = null;
@@ -41,26 +45,32 @@ router.post('/zapier', async (req, res) => {
       assigned_to = vendedores[randomIndex].id;
     }
     
-    // Crear lead con valores limpios
+    console.log('Insertando lead:', {
+      nombre: nombreFinal,
+      telefono: telefonoFinal,
+      modelo: modeloFinal,
+      formaPago: formaPagoFinal,
+      fuente: fuenteFinal
+    });
+    
+    // Crear lead
     const [result] = await pool.execute(
       `INSERT INTO leads (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        nombreLimpio, 
-        telefonoLimpio, 
-        modeloLimpio, 
-        formaPagoLimpio, 
-        estado, 
-        fuenteLimpia, 
-        notasLimpias, 
-        assigned_to
-      ]
+      [nombreFinal, telefonoFinal, modeloFinal, formaPagoFinal, estadoFinal, fuenteFinal, notasFinal, assigned_to]
     );
     
     res.json({ 
       ok: true, 
       message: 'Lead creado exitosamente',
-      leadId: result.insertId 
+      leadId: result.insertId,
+      leadData: {
+        nombre: nombreFinal,
+        telefono: telefonoFinal,
+        modelo: modeloFinal,
+        formaPago: formaPagoFinal,
+        fuente: fuenteFinal
+      }
     });
     
   } catch (error) {
