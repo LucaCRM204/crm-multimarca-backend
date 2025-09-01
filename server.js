@@ -28,10 +28,11 @@ app.use(morgan('dev'));
 
 const origins = (process.env.CORS_ORIGIN || '').split(',').map(s=>s.trim()).filter(Boolean);
 const corsOpts = {
-  origin: origins.length ? origins : true,
+  origin: true, // Permite todos los orígenes temporalmente
   credentials: true,
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-CSRF-Token'],
+  allowedHeaders: ['Content-Type','Authorization','X-CSRF-Token','Accept'],
+  optionsSuccessStatus: 200,
 };
 app.use(cors(corsOpts));
 app.options('*', cors(corsOpts));
