@@ -1,72 +1,68 @@
-﻿const router = require('express').Router();
+﻿const express = require('express');
 const pool = require('../db');
+const router = express.Router();
 
-// Variable global para mantener el índice round-robin
+// Variable para round-robin
 let vendorIndex = 0;
 
-// Webhook para Zapier
-router.post('/zapier', async (req, res) => {
+// Función para obtener vendedores activos
+async function getActiveVendors() {
+  const [vendors] = await pool.execute(
+    'SELECT id FROM users WHERE role = "vendedor" AND active = 1 ORDER BY id'
+  );
+  return vendors;
+}
+
+// Webhook para bot multimarca
+router.post('/bot-multimarca', async (req, res) => {
   try {
-    const zapierKey = req.headers['x-zapier-key'];
-    if (zapierKey !== 'alluma-zapier-secret-2024') {
-      return res.status(401).json({ error: 'No autorizado' });
-    }
-    
     const {
       nombre,
       telefono,
-      email,
-      modelo,
-      formaPago,
-      fuente,
-      notas
+      modelo = 'Consultar',
+      marca = 'vw',
+      fuente = 'bot_multimarca',
+      notas = '',
+      formaPago = 'Consultar'
     } = req.body;
-    
-    // Validación básica
+
     if (!nombre || !telefono) {
-      return res.status(400).json({ error: 'Datos incompletos' });
+      return res.status(400).json({ error: 'Nombre y teléfono son requeridos' });
     }
-    
-    // Obtener vendedores activos ordenados por ID
-    const [vendedores] = await pool.execute(
-      'SELECT id FROM users WHERE role = ? AND active = 1 ORDER BY id',
-      ['vendedor']
-    );
-    
+
+    // Validar marca
+    const validMarcas = ['vw', 'fiat', 'peugeot', 'renault'];
+    const marcaFinal = validMarcas.includes(marca) ? marca : 'vw';
+
+    // Asignación automática round-robin
+    const vendors = await getActiveVendors();
     let assigned_to = null;
-    if (vendedores.length > 0) {
-      // Round-robin: usar el siguiente vendedor en la lista
-      assigned_to = vendedores[vendorIndex % vendedores.length].id;
-      vendorIndex++; // Incrementar para el próximo lead
-      
-      console.log(`Asignando a vendedor ID ${assigned_to} (índice ${vendorIndex - 1})`);
+    
+    if (vendors.length > 0) {
+      assigned_to = vendors[vendorIndex % vendors.length].id;
+      vendorIndex++;
     }
-    
-    // Insertar lead
-    await pool.execute(
-      `INSERT INTO leads (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        nombre,
-        telefono || '',
-        modelo || 'Consultar',
-        formaPago || 'Consultar',
-        'nuevo',
-        fuente || 'facebook',
-        notas || '',
-        assigned_to
-      ]
+
+    // Crear el lead
+    const [result] = await pool.execute(
+      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to, estado, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'nuevo', NOW())`,
+      [nombre, telefono, modelo, marcaFinal, formaPago, fuente, notas, assigned_to]
     );
-    
+
+    console.log(`Lead creado: ID ${result.insertId}, asignado a vendedor ${assigned_to}`);
+
     res.json({ 
       ok: true, 
-      message: 'Lead creado',
-      assignedTo: assigned_to
+      leadId: result.insertId,
+      assignedTo: assigned_to,
+      marca: marcaFinal,
+      message: 'Lead creado correctamente' 
     });
-    
+
   } catch (error) {
-    console.error('Error webhook:', error);
-    res.status(500).json({ error: 'Error al procesar lead' });
+    console.error('Error webhook bot:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
