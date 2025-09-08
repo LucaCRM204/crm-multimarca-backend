@@ -4,13 +4,16 @@ require('dotenv').config();
 
 async function setupDatabase() {
   try {
-    const connection = await mysql.createConnection({
-      host: process.env.DB_HOST,
-      port: process.env.DB_PORT,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME
-    });
+    // Usar DATABASE_URL que funciona tanto local como en Railway
+    const connection = await mysql.createConnection(
+      process.env.DATABASE_URL || {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME
+      }
+    );
 
     console.log('🔧 Configurando CRM Multimarca en Railway...');
 
@@ -75,11 +78,13 @@ async function setupDatabase() {
         `, [name, email, hashedPassword, role]);
         
         console.log(`✅ Usuario creado: ${email} (${role})`);
+      } else {
+        console.log(`⚠️ Usuario ya existe: ${email}`);
       }
     }
     
     await connection.end();
-    console.log('🎉 CRM Multimarca configurado exitosamente en Railway');
+    console.log('🎉 CRM Multimarca configurado exitosamente');
     
   } catch (error) {
     console.error('❌ Error:', error);
