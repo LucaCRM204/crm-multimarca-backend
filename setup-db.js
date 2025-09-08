@@ -6,34 +6,83 @@ async function setupDatabase() {
   try {
     const connection = await mysql.createConnection({
       host: process.env.DB_HOST,
+      port: process.env.DB_PORT,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME
     });
 
-    console.log('🔧 Configurando base de datos...');
+    console.log('🔧 Configurando CRM Multimarca en Railway...');
 
-    // Crear contraseñas hasheadas para usuarios
+    // 1. Crear tabla users
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        role ENUM('owner', 'director', 'gerente', 'supervisor', 'vendedor') NOT NULL,
+        reportsTo INT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (reportsTo) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+
+    // 2. Crear tabla leads
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nombre VARCHAR(255) NOT NULL,
+        telefono VARCHAR(50) NOT NULL,
+        modelo VARCHAR(255) NOT NULL,
+        marca VARCHAR(20) DEFAULT 'vw',
+        formaPago VARCHAR(50),
+        infoUsado TEXT,
+        entrega BOOLEAN DEFAULT FALSE,
+        fecha DATE,
+        estado VARCHAR(50) DEFAULT 'nuevo',
+        assigned_to INT NULL,
+        notas TEXT,
+        fuente VARCHAR(100) DEFAULT 'otro',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+
+    console.log('✅ Tablas creadas');
+
+    // 3. Crear usuarios iniciales
     const passwords = {
-      'maria@alluma.com': await bcrypt.hash('admin123', 10),
-      'carlos@alluma.com': await bcrypt.hash('director123', 10),
-      'ana@alluma.com': await bcrypt.hash('gerente123', 10)
+      'admin@alluma.com': await bcrypt.hash('admin123', 10),
+      'director@alluma.com': await bcrypt.hash('director123', 10),
+      'gerente@alluma.com': await bcrypt.hash('gerente123', 10)
     };
 
-    console.log('✅ Contraseñas hasheadas generadas');
-
-    // Actualizar contraseñas en la base de datos
     for (const [email, hashedPassword] of Object.entries(passwords)) {
-      await connection.execute('UPDATE users SET password = ? WHERE email = ?', [hashedPassword, email]);
+      const [existing] = await connection.execute('SELECT id FROM users WHERE email = ?', [email]);
+      
+      if (existing.length === 0) {
+        const role = email.includes('admin') ? 'owner' : 
+                    email.includes('director') ? 'director' : 'gerente';
+        const name = email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1);
+        
+        await connection.execute(`
+          INSERT INTO users (name, email, password, role, active) 
+          VALUES (?, ?, ?, ?, 1)
+        `, [name, email, hashedPassword, role]);
+        
+        console.log(`✅ Usuario creado: ${email} (${role})`);
+      }
     }
-
-    console.log('✅ Usuarios actualizados con contraseñas seguras');
     
     await connection.end();
-    console.log('🎉 Configuración completada exitosamente');
+    console.log('🎉 CRM Multimarca configurado exitosamente en Railway');
     
   } catch (error) {
-    console.error('❌ Error configurando base de datos:', error);
+    console.error('❌ Error:', error);
     process.exit(1);
   }
 }
