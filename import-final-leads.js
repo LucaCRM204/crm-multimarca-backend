@@ -1,4 +1,4 @@
-﻿// import-final-leads.js - Import con asignación garantizada (login /api, recursos sin /api)
+﻿// import-final-leads.js - Import con asignación garantizada (todo bajo /api)
 // Instalar: npm install axios
 // Ejecutar: node import-final-leads.js
 
@@ -7,14 +7,11 @@ const axios = require('axios');
 const baseUrl = 'https://crm-multimarca-backend-production.up.railway.app';
 const email = 'Luca@alluma.com';
 const password = 'Luca2702';
-// Si querés forzar token directo, ponelo aquí; en caso contrario dejalo vacío para usar login:
-const DIRECT_TOKEN = ''; // antes: 'LucaMiguelCaorsiMultimarca456'
+const DIRECT_TOKEN = ''; // opcional
 
 let currentSellerIndex = 0; // Rotación round-robin
 
-// =======================
-//   DATA A IMPORTAR (tu array tal cual)
-// =======================
+// ======= TU ARRAY (sin cambios) =======
 const leadsData = [
   {
     nombre: "Adolfo Antunez",
@@ -645,13 +642,14 @@ const leadsData = [
   }
 ];
 
+
 // =======================
 //   AUTH / HELPERS
 // =======================
 async function getAuthToken() {
   try {
     console.log('Haciendo login...');
-    // LOGIN: con prefijo /api
+    // LOGIN: SIEMPRE /api
     const { data } = await axios.post(`${baseUrl}/api/auth/login`, { email, password });
     if (data?.token) {
       console.log('Token obtenido exitosamente');
@@ -667,14 +665,14 @@ async function getAuthToken() {
 
 async function fetchSellersFromAPI(token) {
   try {
-    // USERS: sin /api
-    const { data } = await axios.get(`${baseUrl}/users`, {
+    // USERS: también bajo /api (tu router de users está montado con /api en el server)
+    const { data } = await axios.get(`${baseUrl}/api/users`, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    const sellers = (Array.isArray(data) ? data : [])
+    const list = Array.isArray(data?.users) ? data.users : (Array.isArray(data) ? data : []);
+    return list
       .filter(u => u.role === 'vendedor' && (u.active === 1 || u.active === true))
       .map(u => ({ id: u.id, nombre: u.name, email: u.email }));
-    return sellers;
   } catch {
     return [];
   }
@@ -751,12 +749,12 @@ async function importAllLeads() {
     let chosenSeller = null;
     if (sellers.length) {
       chosenSeller = getNextSeller(sellers);
-      lead.vendedor = chosenSeller.id;     // campo que tu API entiende
+      lead.vendedor = chosenSeller.id; // tu API lo mapea a assigned_to:contentReference[oaicite:3]{index=3}
     }
 
     try {
-      // (A) CREAR: /leads  (sin /api)
-      const createRes = await axios.post(`${baseUrl}/leads`, lead, {
+      // (A) CREAR: /api/leads  (¡ojo el prefijo!)
+      const createRes = await axios.post(`${baseUrl}/api/leads`, lead, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -764,47 +762,30 @@ async function importAllLeads() {
       });
 
       const created = createRes.data || {};
-      const leadId = created.id || created.lead?.id;
+      const leadId = created?.lead?.id || created?.id;
+      if (!leadId) {
+        throw new Error('No llegó el ID del lead creado');
+      }
 
-      // (B) FORZAR ASIGNACIÓN: PUT /leads/:id
-      if (leadId && chosenSeller?.id) {
+      // (B) FORZAR ASIGNACIÓN (por si el create no tomó vendedor): PUT /api/leads/:id
+      if (chosenSeller?.id) {
         let assignedOk = false;
 
         // Intento 1: { vendedor }
         try {
-          await axios.put(`${baseUrl}/leads/${leadId}`, { vendedor: chosenSeller.id }, {
+          await axios.put(`${baseUrl}/api/leads/${leadId}`, { vendedor: chosenSeller.id }, {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
           });
-          const { data: check1 } = await axios.get(`${baseUrl}/leads/${leadId}`, {
+          const { data: check1 } = await axios.get(`${baseUrl}/api/leads/${leadId}`, {
             headers: { Authorization: `Bearer ${token}` }
           });
-          if (check1?.vendedor === chosenSeller.id) assignedOk = true;
+          if (check1?.lead?.vendedor === chosenSeller.id) assignedOk = true;
         } catch (_) {}
 
-        // Intento 2 (fallback): { vendedor_id }
         if (!assignedOk) {
-          try {
-            await axios.put(`${baseUrl}/leads/${leadId}`, { vendedor_id: chosenSeller.id }, {
-              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            const { data: check2 } = await axios.get(`${baseUrl}/leads/${leadId}`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (check2?.vendedor === chosenSeller.id || check2?.vendedor_id === chosenSeller.id) {
-              assignedOk = true;
-            }
-          } catch (e) {
-            const msg = e.response?.data?.error || e.message;
-            errorDetails.push(`${lead.nombre}: Falló asignación por PUT (fallback) → ${msg}`);
-            console.log(`⚠ ${i + 1}/${leadsData.length} - Asignación fallback fallida: ${lead.nombre} → ${msg}`);
-          }
-        }
-
-        if (assignedOk) {
-          // contabilizar
-          assignmentStats[chosenSeller.nombre] = (assignmentStats[chosenSeller.nombre] || 0) + 1;
-        } else {
           console.log(`⚠ ${i + 1}/${leadsData.length} - No pude confirmar asignación de ${lead.nombre} a ${chosenSeller.nombre}`);
+        } else {
+          assignmentStats[chosenSeller.nombre] = (assignmentStats[chosenSeller.nombre] || 0) + 1;
         }
       }
 
