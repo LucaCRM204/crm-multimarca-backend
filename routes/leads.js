@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { getAssignedVendorByBrand } = require('../utils/assign');
 
 // Utilidad para mapear assigned_to -> vendedor
 const mapLead = (row) => ({
@@ -49,7 +50,7 @@ router.post('/', authenticateToken, async (req, res) => {
       estado = 'nuevo',
       fuente = 'otro',
       notas = '',
-      vendedor = null, // importante: se guarda como assigned_to
+      vendedor = null, // Si viene null, se asigna automáticamente
     } = req.body;
 
     // Validar marca
@@ -57,10 +58,17 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
     }
 
+    // Asignación automática por marca si no viene vendedor específico
+    let assigned_to = vendedor;
+    if (!assigned_to) {
+      assigned_to = await getAssignedVendorByBrand(marca);
+      console.log(`Lead auto-asignado por marca ${marca} al vendedor ${assigned_to}`);
+    }
+
     const [result] = await pool.execute(
       `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, vendedor, infoUsado, entrega, fecha]
+      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha]
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);

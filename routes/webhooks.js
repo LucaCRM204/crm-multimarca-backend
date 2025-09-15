@@ -1,5 +1,6 @@
 ﻿const express = require('express');
 const pool = require('../db');
+const { getAssignedVendorByBrand } = require('../utils/assign');
 const router = express.Router();
 
 // ========= Helpers de limpieza / normalización =========
@@ -35,16 +36,6 @@ function detectMarca(text) {
   return null;
 }
 
-// ========= Round-robin =========
-let vendorIndex = 0;
-
-async function getActiveVendors() {
-  const [vendors] = await pool.execute(
-    'SELECT id FROM users WHERE role = "vendedor" AND active = 1 ORDER BY id'
-  );
-  return vendors;
-}
-
 // ========= Webhook: bot multimarca =========
 router.post('/bot-multimarca', async (req, res) => {
   try {
@@ -72,13 +63,8 @@ router.post('/bot-multimarca', async (req, res) => {
       marcaFinal = detectMarca(marca) || detectMarca(modelo) || 'vw';
     }
 
-    // 5) Asignación automática round-robin (todos los vendedores activos)
-    const vendors = await getActiveVendors();
-    let assigned_to = null;
-    if (vendors.length > 0) {
-      assigned_to = vendors[vendorIndex % vendors.length].id;
-      vendorIndex++;
-    }
+    // 5) Asignación automática por marca y equipo
+    const assigned_to = await getAssignedVendorByBrand(marcaFinal);
 
     // 6) Inserción
     const [result] = await pool.execute(
@@ -89,7 +75,7 @@ router.post('/bot-multimarca', async (req, res) => {
       [nombre, telefono, modelo, marcaFinal, formaPago, fuente, notas, assigned_to]
     );
 
-    console.log(`Lead creado: ID ${result.insertId}, asignado a vendedor ${assigned_to}`);
+    console.log(`Lead creado: ID ${result.insertId}, marca ${marcaFinal}, asignado a vendedor ${assigned_to}`);
 
     // 7) Respuesta
     res.json({
