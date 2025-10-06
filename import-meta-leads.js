@@ -1,737 +1,1899 @@
-﻿// import_leads.js - Para ejecutar en terminal con Node.js
-// Instalar primero: npm install node-fetch
-// Ejecutar: node import_leads.js
+﻿const axios = require('axios');
 
-const fetch = require('node-fetch');
+// Configuración del CRM
+const CRM_CONFIG = {
+  baseURL: 'https://crm-multimarca-backend-production.up.railway.app/api',
+  // Credenciales para hacer login automático
+  email: 'Luca@alluma.com', // Cambiar por tu email de admin
+  password: 'Luca2702'    // Cambiar por tu password
+};
 
-const baseUrl = 'https://crm-multimarca-backend-production.up.railway.app';
-const email = 'Luca@alluma.com';
-const password = 'Luca2702';
+// Variable para almacenar el token
+let authToken = null;
 
-const leadsData = [
+// Función para hacer login y obtener token
+async function login() {
+  try {
+    console.log('🔐 Haciendo login...');
+    const response = await axios.post(`${CRM_CONFIG.baseURL}/auth/login`, {
+      email: CRM_CONFIG.email,
+      password: CRM_CONFIG.password
+    });
+    
+    if (response.data.ok && response.data.token) {
+      authToken = response.data.token;
+      console.log('✅ Login exitoso');
+      return true;
+    } else {
+      console.log('❌ Login falló:', response.data);
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Error en login:', error.response?.data || error.message);
+    return false;
+  }
+}
+
+// TODOS LOS 133 LEADS EXTRAÍDOS DEL EXCEL COMPLETO
+const LEAD_DATA = [
   {
-    nombre: "Adolfo Antunez",
-    telefono: "+54155080777",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Financiado",
-    notas: "Auto año 24 con 32000 km puedo aportar uno dólares y el resto en cuotas",
+    nombre: "Francisco Valenzuel",
+    telefono: "+543416056935",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "usado",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: usado"
   },
   {
-    nombre: "Miguel Angel Vieira",
-    telefono: "+542664555527",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "usado",
+    nombre: "Mario Paez",
+    telefono: "+543515400249",
+    modelo: "expert",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
   },
   {
-    nombre: "Enrique plastina",
-    telefono: "3757628854",
+    nombre: "Adriano Reinek",
+    telefono: "+543754458553",
     modelo: "strada",
     marca: "fiat",
     formaPago: "Contado",
-    notas: "Si",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No tengo entrega"
   },
   {
-    nombre: "Jonatan Emir",
-    telefono: "3498403814",
-    modelo: "fastback",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Info",
+    nombre: "Dante Ruben Klein",
+    telefono: "3492567187",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo"
   },
   {
-    nombre: "Juan Rebholz",
-    telefono: "+543704682180",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "si amarok4x4 180hp 2011",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "miguel",
-    telefono: "+543854419123",
-    modelo: "pulse",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Marta Ricca",
-    telefono: "+543584193891",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "No",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Javier Antonio Scutaro",
-    telefono: "+541170212892",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "pedroramon",
-    telefono: "+541141610054",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Financiado",
-    notas: "usado más cuotas",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Juan Gualberto Vallejos",
-    telefono: "+543794243621",
-    modelo: "toro",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Toro 2019, Freedom 1.8 C Aut.84.000 km Excelente estado todo pago",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Alberto Cagol",
-    telefono: "+543515741574",
-    modelo: "tera",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Olga Guerrero",
-    telefono: "+542914352052",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Usado + Efectivo",
-    notas: "tengo un usado y efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Olver Paz",
-    telefono: "+543874200800",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Carlos Enrique Moro",
-    telefono: "+543815130968",
-    modelo: "pulse",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Mario Saade",
-    telefono: "+543413856846",
-    modelo: "fiorino",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Cuál es la dirección ?",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Claudia Giordano la Rosa",
-    telefono: "+541150646872",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Financiado",
-    notas: "Estoy interesada en comprar una tcrosss totalmente en cuotas y recibirla en 4/5 meses",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "SURDICA",
-    telefono: "+541134299870",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Tal vez",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Susana Bock",
-    telefono: "+543425059857",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Nelson Santos Palacios",
-    telefono: "+542622526199",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "ambos",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Ricardo Cuevas",
-    telefono: "+542984310548",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Una Ecosport 2015",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Francisco Luis Sosa",
-    telefono: "+542291499018",
-    modelo: "polo",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Gloria Cristina Vilas",
-    telefono: "+12364685681",
-    modelo: "taos",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Juan D Muraña",
-    telefono: "+543401433547",
-    modelo: "fiorino",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "No",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Gabriel Coronel",
-    telefono: "+541168968156",
-    modelo: "pulse",
-    marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "Renault kwid",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Estela SabinaBorre",
-    telefono: "+543364344735",
-    modelo: "polo",
-    marca: "vw",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Pablo Cuva",
-    telefono: "+542302525479",
-    modelo: "nivus",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "si un gol 2012 power",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Fernando Schamne",
-    telefono: "+5491161321802",
-    modelo: "polo",
-    marca: "vw",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Rodrigo Chandia",
-    telefono: "+543518657358",
-    modelo: "t-cross",
-    marca: "vw",
-    formaPago: "Contado",
-    notas: "ambos",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Alejandra Sosa",
-    telefono: "+542625448097",
-    modelo: "polo",
-    marca: "vw",
-    formaPago: "Contado",
-    notas: "Efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Vanesa Zabala",
-    telefono: "+542616064079",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Usado + Efectivo",
-    notas: "Si tengo y tengo efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Hugo Corzo",
-    telefono: "+543573430397",
-    modelo: "nivus",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Santi Ardanaz",
-    telefono: "+543512300123",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "Auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Fede Flores",
-    telefono: "+543875157663",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "no",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Juan González",
-    telefono: "+542216414310",
+    nombre: "Raul Agustin Walton",
+    telefono: "+542477350162",
     modelo: "mobi",
     marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "suzuki fun 2005",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Victoria Eva Godoy",
-    telefono: "+543513735342",
-    modelo: "polo",
-    marca: "vw",
     formaPago: "Contado",
-    notas: "no",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
   },
   {
-    nombre: "Jose Manuel Alvarez Urdaneta",
-    telefono: "+541123979842",
+    nombre: "Ernesto Ruiz",
+    telefono: "+541166431598",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Miguel Angel Izaguirre",
+    telefono: "+541159643544",
+    modelo: "208",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "un Ford Focus mod.2007, nasfta aire direcc. levanta crist. elrc. delanteros y motor hecho nuevo a full.",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: un Ford Focus mod.2007, nasfta aire direcc. levanta crist. elrc. delanteros y motor hecho nuevo a full."
+  },
+  {
+    nombre: "Bibiana Enriquez",
+    telefono: "+541140580561",
     modelo: "cronos",
     marca: "fiat",
-    formaPago: "Contado",
-    notas: "No",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efetivo"
   },
   {
-    nombre: "Nahuel Gonzalez",
-    telefono: "1131051318",
+    nombre: "Roxana Márquez",
+    telefono: "+543518180850",
     modelo: "argo",
     marca: "fiat",
     formaPago: "Contado",
-    notas: "Argo hgt",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
   },
   {
-    nombre: "Federico Layh",
-    telefono: "+543758480331",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Auto usado oroch",
+    nombre: "Teresa perez",
+    telefono: "+542254531043",
+    modelo: "208",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "un usado",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: un usado"
   },
   {
-    nombre: "Carlos Vicente Gomez",
-    telefono: "+541161268884",
-    modelo: "cronos",
+    nombre: "Karen Cereijo",
+    telefono: "+541127938374",
+    modelo: "toro",
     marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "Solo auto usado",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado"
   },
   {
-    nombre: "Maximo Felix Scheinsohn",
-    telefono: "+541169062094",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Julieta Sentin",
-    telefono: "+542271438764",
-    modelo: "cronos",
+    nombre: "Eduardo Abel Gioria",
+    telefono: "+543541571006",
+    modelo: "toro",
     marca: "fiat",
     formaPago: "Contado",
-    notas: "efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Fiat mod 98 Palio y dos millones"
   },
   {
-    nombre: "Lucia Marino",
-    telefono: "+5492615397662",
-    modelo: "polo",
-    marca: "vw",
-    formaPago: "Contado",
-    notas: "no",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Carlos Eduardo",
-    telefono: "+541125063996",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "auto usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Alejandro Rosalez",
-    telefono: "+543804720755",
-    modelo: "amarok",
-    marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Si cuarto con un usado",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Fernando Fernandez",
-    telefono: "+541131697917",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "efectivo",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Monchi Herrera",
-    telefono: "+543493495418",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "no",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Simon Lucas Sanconte",
-    telefono: "+541159566883",
-    modelo: "fiorino",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "algo efec",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Naty Naty",
-    telefono: "3518500773",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "Si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Ce Cii",
-    telefono: "+542215624502",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "5000000",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Aron Elías costanzo",
-    telefono: "+53405439368",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "4000000",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Lizandro Daniel Comet",
-    telefono: "+541127917517",
-    modelo: "fiorino",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "no",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Rocy Rodriguez",
-    telefono: "+543755396798",
-    modelo: "cronos",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Fabián Benjamín Gabriel Flores",
-    telefono: "+543413707935",
-    modelo: "strada",
-    marca: "fiat",
-    formaPago: "Contado",
-    notas: "si",
-    estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
-  },
-  {
-    nombre: "Ricardo Augusto Caraballo",
-    telefono: "+543764172086",
+    nombre: "Luciano Leonel",
+    telefono: "+542617190639",
     modelo: "mobi",
     marca: "fiat",
     formaPago: "Contado",
-    notas: "no",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
   },
   {
-    nombre: "Enrique Medrano",
-    telefono: "+541164394388",
-    modelo: "polo",
+    nombre: "Mariano Matias Videla",
+    telefono: "+5493541540683",
+    modelo: "tera",
     marca: "vw",
-    formaPago: "Con Usado",
-    notas: "usado",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo"
   },
   {
-    nombre: "Jesus Cruz",
-    telefono: "+542622353681",
+    nombre: "Ramon Perez",
+    telefono: "+542616294568",
+    modelo: "taos",
+    marca: "vw",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo o ambos"
+  },
+  {
+    nombre: "Viviana Rossetti",
+    telefono: "+543512126389",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Solo financiación . Info solo por wasap por favor no puedo atender llamadas"
+  },
+  {
+    nombre: "Claudia Pelozo",
+    telefono: "+541167077972",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo"
+  },
+  {
+    nombre: "Cristian Luque",
+    telefono: "+543406423780",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Ruben Barrientos",
+    telefono: "+541136940037",
     modelo: "amarok",
     marca: "vw",
-    formaPago: "Con Usado",
-    notas: "Usado",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: vogage 2013"
   },
   {
-    nombre: "Miguel E Ortiz",
-    telefono: "+543888685192",
+    nombre: "Julio Ferrer",
+    telefono: "+543517702577",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Ernesto Furnes",
+    telefono: "Si",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Ambos"
+  },
+  {
+    nombre: "Sergio Torassa",
+    telefono: "+5493404524644",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No.no.tengo empezar de cero"
+  },
+  {
+    nombre: "Juan Pettersson",
+    telefono: "+541136136317",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "walter nestor vilchez",
+    telefono: "+543462532259",
+    modelo: "t-cross",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "rpp",
+    telefono: "+543834383838",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Vera Angel Gabriel",
+    telefono: "+5491138616813",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Claudio Melo",
+    telefono: "+542984191333",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Alex Ferrari",
+    telefono: "+541164751512",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Dorita Hernandez",
+    telefono: "2364348686",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Usado",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Usado"
+  },
+  {
+    nombre: "Ezequiel Andres Gerez",
+    telefono: "+541176335987",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "Erica Pacifico",
+    telefono: "+13435213147",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Omar Abranca",
+    telefono: "+541123383649",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Astra 2006"
+  },
+  {
+    nombre: "Pedro Alberto Moderne",
+    telefono: "+543416651846",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto y efectivo",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto y efectivo"
+  },
+  {
+    nombre: "Isaías Daniel Gómez",
+    telefono: "+541127447098",
+    modelo: "expert",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Roque Correa leonardo",
+    telefono: "+541151085933",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Usado",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Usado"
+  },
+  {
+    nombre: "Gustavo Amoroso",
+    telefono: "+542214118464",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Usado",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Usado"
+  },
+  {
+    nombre: "Walter Fabian Zaracho",
+    telefono: "+541159957021",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Javier Pereira Morinigo",
+    telefono: "+542804963981",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Joaquín Merlo Marelli",
+    telefono: "+542236369024",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Esteban Luna",
+    telefono: "+541131433207",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Carlos Alberto Sanchez",
+    telefono: "+5493735406477",
+    modelo: "nivus",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "un gol usado mod.2007",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: un gol usado mod.2007"
+  },
+  {
+    nombre: "Angel Lezcano",
+    telefono: "+541171303498",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Tengo planes"
+  },
+  {
+    nombre: "Rosa Martinez",
+    telefono: "+541144149933",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Silvia Garcia",
+    telefono: "+541168074262",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Financiado",
+    infoUsado: "Si con anticipo",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si con anticipo"
+  },
+  {
+    nombre: "Carlos Quadrelli",
+    telefono: "+541145630810",
+    modelo: "fiorino",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si una fiorino 2011 conaire dirección y gnc",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si una fiorino 2011 conaire dirección y gnc"
+  },
+  {
+    nombre: "Francisco Ortigoza",
+    telefono: "+541171094867",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo solo"
+  },
+  {
+    nombre: "Diego Burgos",
+    telefono: "3704527718",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
+  },
+  {
+    nombre: "si me intrress",
+    telefono: "+541127051117",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Mariano Julian Castro Olivera",
+    telefono: "+5491164987440",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Ricardo Serrano",
+    telefono: "+543835510284",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Roberto Alvarez",
+    telefono: "+542923652069",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "entregi auto",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: entregi auto"
+  },
+  {
+    nombre: "flavia blanco",
+    telefono: "+543777511054",
+    modelo: "titano",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "usado y efectivo",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: usado y efectivo"
+  },
+  {
+    nombre: "Claudio Battistelli",
+    telefono: "+541127057489",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "si un Chevrolet Sonic 2015",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si un Chevrolet Sonic 2015"
+  },
+  {
+    nombre: "Ariel Hernan Motta",
+    telefono: "+541136042546",
+    modelo: "t-cross",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: nada"
+  },
+  {
+    nombre: "Stella Maris Ladeda",
+    telefono: "+541137610175",
+    modelo: "nivus",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "Angel Duran",
+    telefono: "+542645638259",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Augusto Chávez",
+    telefono: "+543513856660",
+    modelo: "fiorino",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Ariel Daban",
+    telefono: "+542656446080",
+    modelo: "titano",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Auto usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Auto usado"
+  },
+  {
+    nombre: "Ruben Amarilla",
+    telefono: "+542215241254",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado sí..",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado sí.."
+  },
+  {
+    nombre: "Nacho",
+    telefono: "+541176165526",
+    modelo: "expert",
+    marca: "peugeot",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Anticipo y cuotas"
+  },
+  {
+    nombre: "Ruben Silvestri",
+    telefono: "+541150399517",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Juan domingo Brito",
+    telefono: "+541124582865",
+    modelo: "titano",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "si efectivo",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si efectivo"
+  },
+  {
+    nombre: "Mandy Ortiz",
+    telefono: "+541165690756",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Ismael Borean",
+    telefono: "+542214631509",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efe"
+  },
+  {
+    nombre: "Daniela Cuto",
+    telefono: "+542355645973",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: gol gti 2010 3p"
+  },
+  {
+    nombre: "Carmen Ogliastre",
+    telefono: "+5491168326183",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
+  },
+  {
+    nombre: "Walter Quiroga",
+    telefono: "+542616157473",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Financiado",
+    infoUsado: "Si un anticipo",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si un anticipo"
+  },
+  {
+    nombre: "Alfredo Gallardo",
+    telefono: "+543794540209",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "Si tengo",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si tengo"
+  },
+  {
+    nombre: "Alberto Luis Aldana",
+    telefono: "+542996563578",
     modelo: "toro",
     marca: "fiat",
-    formaPago: "Con Usado",
-    notas: "si un auto",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "si entrego cinco palos de cuánto sería la cuota",
+    entrega: true,
+    fecha: "2025-09-13",
     estado: "nuevo",
-    fuente: "otro",
-    fecha: "2025-09-09"
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si entrego cinco palos de cuánto sería la cuota"
+  },
+  {
+    nombre: "Silvia Nuñez",
+    telefono: "+543489359735",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Auto usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Auto usado"
+  },
+  {
+    nombre: "Manuel Cataldo",
+    telefono: "+541155237785",
+    modelo: "nivus",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "xrtvrctc",
+    telefono: "+543435214558",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: ubrxuhxfvyyc"
+  },
+  {
+    nombre: "Fabricio Gonzalez",
+    telefono: "+542645476134",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Auto Usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Auto Usado"
+  },
+  {
+    nombre: "Juanga Medina",
+    telefono: "+542216496746",
+    modelo: "t-cross",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "ricardo.daniel.ortiz65@gmail.com Orti",
+    telefono: "+541124560598",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: 20000 dólares"
+  },
+  {
+    nombre: "Barbara Pinharanda",
+    telefono: "+5493484453768",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: puede ser"
+  },
+  {
+    nombre: "Jorge Luis Caram",
+    telefono: "+541162857256",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado"
+  },
+  {
+    nombre: "maría de los ángeles Bondia",
+    telefono: "+5493513952479",
+    modelo: "2008",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Alan Jonatan Larrosa",
+    telefono: "+542914704447",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Jose Handel",
+    telefono: "+541164401640",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: coche y efctivo"
+  },
+  {
+    nombre: "Paula Servin",
+    telefono: "+541131253144",
+    modelo: "2008",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Ernesto Pereyra",
+    telefono: "+543511568868",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: financiación"
+  },
+  {
+    nombre: "Isabel Simplemente",
+    telefono: "+541140411218",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "Fabio Amarilla",
+    telefono: "+543512691971",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "Tengo un usado que no anda y efectivo...el usado es viejo,es un Renault 9 modelo 95...",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Tengo un usado que no anda y efectivo...el usado es viejo,es un Renault 9 modelo 95..."
+  },
+  {
+    nombre: "Ignacio Ramon Aquino",
+    telefono: "+543718633698",
+    modelo: "expert",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: ninguno de los dos"
+  },
+  {
+    nombre: "Pedro Montenegro",
+    telefono: "+541122875917",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Eduardo Orlando Acosta",
+    telefono: "+543624053259",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Antonio Domínguez",
+    telefono: "+543704831503",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "vehículo usado Ecosport 2011",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: vehículo usado Ecosport 2011"
+  },
+  {
+    nombre: "Ricardo anastasio trevisi",
+    telefono: "+542915245692",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: tengo un Ford Fiesta max año 2010 muy bueno"
+  },
+  {
+    nombre: "Juan Carlos Ledesma",
+    telefono: "+543518186570",
+    modelo: "208",
+    marca: "peugeot",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Valeria Chueco",
+    telefono: "+542216027105",
+    modelo: "expert",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Lavadero Oscar",
+    telefono: "+541158306978",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si 2.500",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si 2.500"
+  },
+  {
+    nombre: "Jose Luis Spehrs",
+    telefono: "+541131481584",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
+  },
+  {
+    nombre: "J C",
+    telefono: "1132972552",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: 500000"
+  },
+  {
+    nombre: "Patricia Morais",
+    telefono: "+543741403175",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Anticipo"
+  },
+  {
+    nombre: "Jose Luis Cabanillas",
+    telefono: "+541138056007",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Sergio Andres Benitez",
+    telefono: "+543624048648",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Corsa 1.6 modelo 2007"
+  },
+  {
+    nombre: "Jose Luis Villordo",
+    telefono: "+543415499794",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: no"
+  },
+  {
+    nombre: "Claudio Oyola",
+    telefono: "+542616323070",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Deseo presupuestos."
+  },
+  {
+    nombre: "Olga Susana Cancino",
+    telefono: "+542995073735",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: anticipo en efectivo"
+  },
+  {
+    nombre: "Alejandro Morrone",
+    telefono: "+541140801034",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Victoria Salvatierra",
+    telefono: "+5493413347544",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: usado"
+  },
+  {
+    nombre: "Jacob Llanos",
+    telefono: "+541167848914",
+    modelo: "parner",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Un auto usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Un auto usado"
+  },
+  {
+    nombre: "lorena maria poblete",
+    telefono: "+541156526262",
+    modelo: "mobi",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: puedo pagar cuotas"
+  },
+  {
+    nombre: "Cristina Tohara Tacuri",
+    telefono: "+59175733172",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Ani Teruelo",
+    telefono: "+541124843758",
+    modelo: "208",
+    marca: "peugeot",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Solo anticipo"
+  },
+  {
+    nombre: "Jorge Mercado",
+    telefono: "+541163755996",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Patocho Matamala-pinto",
+    telefono: "+542994223369",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Paola Diaz",
+    telefono: "+543813546934",
+    modelo: "argo",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "sii",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: sii"
+  },
+  {
+    nombre: "Daniel Cangaro",
+    telefono: "+541141707212",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Ambos"
+  },
+  {
+    nombre: "Ivar Ayllon",
+    telefono: "+5493884588311",
+    modelo: "pulse",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: efectivo"
+  },
+  {
+    nombre: "Rikii Saucedo",
+    telefono: "+543625279722",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Una moto"
+  },
+  {
+    nombre: "Federico Romero",
+    telefono: "+542932529453",
+    modelo: "titano",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: ambos"
+  },
+  {
+    nombre: "Luis Muñoz Vicuña",
+    telefono: "+541157237373",
+    modelo: "fiorino",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo"
+  },
+  {
+    nombre: "vanesa cardenas",
+    telefono: "+5491168245428",
+    modelo: "cronos",
+    marca: "fiat",
+    formaPago: "Efectivo",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Efectivo"
+  },
+  {
+    nombre: "Richard Bohn",
+    telefono: "+5492302566434",
+    modelo: "amarok",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Un auto",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Un auto"
+  },
+  {
+    nombre: "Carlos Alberto Latorre",
+    telefono: "+542901488134",
+    modelo: "taos",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Ecosport titanium at"
+  },
+  {
+    nombre: "Mara Palatucci",
+    telefono: "+543435102858",
+    modelo: "tera",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Nada porque vendi mi auto para pagar deudas."
+  },
+  {
+    nombre: "Jorge Gomez",
+    telefono: "+543854405066",
+    modelo: "nivus",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Fiat crono"
+  },
+  {
+    nombre: "Jorgeevaristopuccini",
+    telefono: "+543794948466",
+    modelo: "2008",
+    marca: "peugeot",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: El pegador 2008 como seria"
+  },
+  {
+    nombre: "Victor Hugo Jofre",
+    telefono: "+542664514993",
+    modelo: "t-cross",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado y efectivo",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado y efectivo"
+  },
+  {
+    nombre: "Julio Cesar Villagra",
+    telefono: "+543834774225",
+    modelo: "nivus",
+    marca: "vw",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado"
+  },
+  {
+    nombre: "Carlos Luna",
+    telefono: "+542334404310",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Financiado",
+    infoUsado: "Si con anticipo",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si con anticipo"
+  },
+  {
+    nombre: "Carlos Quadrelli",
+    telefono: "+541145630810",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "Poseo una fiorino 2011 Fire con aire direccion y gnc de 5.º generación soy único dueño la tengo de 0 k",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Poseo una fiorino 2011 Fire con aire direccion y gnc de 5.º generación soy único dueño la tengo de 0 k"
+  },
+  {
+    nombre: "Angel Bustos",
+    telefono: "+543815372839",
+    modelo: "strada",
+    marca: "fiat",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado"
+  },
+  {
+    nombre: "Ruben Mendieta",
+    telefono: "+5491132861886",
+    modelo: "polo",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
+  },
+  {
+    nombre: "Lorena Solesdad Gonzalez",
+    telefono: "+541165924839",
+    modelo: "t-cross",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Lorena Tene",
+    telefono: "+542944289775",
+    modelo: "pulse",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "Tengo anticipo",
+    entrega: false,
+    fecha: "2025-09-14",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Tengo anticipo"
+  },
+  {
+    nombre: "Claudia Amuchastegui",
+    telefono: "+5492616350419",
+    modelo: "208",
+    marca: "peugeot",
+    formaPago: "Usado + Efectivo",
+    infoUsado: "auto usado",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: auto usado"
+  },
+  {
+    nombre: "Oscar Barada",
+    telefono: "+543764646100",
+    modelo: "tera",
+    marca: "vw",
+    formaPago: "Contado",
+    infoUsado: "si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: si"
+  },
+  {
+    nombre: "Nemy Castillo",
+    telefono: "+92612464239",
+    modelo: "toro",
+    marca: "fiat",
+    formaPago: "Financiado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Solo financiacion por favor.gracias"
+  },
+  {
+    nombre: "Toty Ferre",
+    telefono: "+542975922399",
+    modelo: "toro",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "Si",
+    entrega: true,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: Si"
+  },
+  {
+    nombre: "Juan Cruz Castro",
+    telefono: "+543549533248",
+    modelo: "toro",
+    marca: "fiat",
+    formaPago: "Contado",
+    infoUsado: "",
+    entrega: false,
+    fecha: "2025-09-13",
+    estado: "nuevo",
+    fuente: "formulario_web",
+    notas: "Importado desde Excel. Info original: No"
   }
 ];
 
-async function getAuthToken() {
+// Función para crear un lead en el CRM
+async function createLead(leadData) {
   try {
-    console.log('🔐 Haciendo login...');
-    const response = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
+    const response = await axios.post(`${CRM_CONFIG.baseURL}/leads`, leadData, {
       headers: {
+        'Authorization': `Bearer ${authToken}`,
         'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email, password })
+      }
     });
     
-    if (response.ok) {
-      const data = await response.json();
-      console.log('✅ Token obtenido exitosamente');
-      return data.token;
-    } else {
-      const error = await response.json();
-      console.error('❌ Error en login:', error);
-      return null;
-    }
+    return { success: true, data: response.data, lead: leadData };
   } catch (error) {
-    console.error('❌ Error de conexión en login:', error.message);
-    return null;
+    return { 
+      success: false, 
+      error: error.response?.data?.error || error.message,
+      lead: leadData 
+    };
   }
 }
 
-async function importAllLeads() {
-  console.log('🚀 Iniciando proceso de importación...\n');
+// Función principal de importación
+async function importLeads() {
+  console.log('🚀 Iniciando importación de leads...\n');
   
-  // Obtener token
-  const token = await getAuthToken();
-  if (!token) {
-    console.log('❌ No se pudo obtener el token. Proceso cancelado.');
+  // Hacer login primero
+  const loginSuccess = await login();
+  if (!loginSuccess) {
+    console.log('❌ No se pudo hacer login. Verifica las credenciales.');
     return;
   }
   
-  let imported = 0;
-  let errors = 0;
-  const errorDetails = [];
+  console.log(`📊 Se importarán ${LEAD_DATA.length} leads\n`);
   
-  console.log(`📊 Procesando ${leadsData.length} leads...\n`);
+  // Estadísticas previas
+  const marcas = LEAD_DATA.reduce((acc, lead) => {
+    acc[lead.marca] = (acc[lead.marca] || 0) + 1;
+    return acc;
+  }, {});
   
-  for (let i = 0; i < leadsData.length; i++) {
-    const lead = leadsData[i];
+  console.log('📈 Distribución por marca:');
+  Object.entries(marcas).forEach(([marca, count]) => {
+    console.log(`   ${marca}: ${count} leads`);
+  });
+  console.log('');
+  
+  // Importar leads uno por uno
+  const results = {
+    success: [],
+    errors: []
+  };
+  
+  for (let i = 0; i < LEAD_DATA.length; i++) {
+    const lead = LEAD_DATA[i];
+    console.log(`⏳ Importando lead ${i + 1}/${LEAD_DATA.length}: ${lead.nombre}`);
     
-    try {
-      const response = await fetch(`${baseUrl}/api/leads`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(lead)
-      });
-      
-      if (response.ok) {
-        imported++;
-        console.log(`✅ ${i+1}/${leadsData.length} - ${lead.nombre} (${lead.marca} ${lead.modelo})`);
-      } else {
-        const error = await response.json();
-        errors++;
-        errorDetails.push(`${lead.nombre}: ${error.error || 'Error desconocido'}`);
-        console.log(`❌ ${i+1}/${leadsData.length} - Error: ${lead.nombre} - ${error.error || 'Error desconocido'}`);
-      }
-      
-      // Pausa entre requests
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-    } catch (error) {
-      errors++;
-      errorDetails.push(`${lead.nombre}: Error de conexión - ${error.message}`);
-      console.log(`❌ ${i+1}/${leadsData.length} - Error conexión: ${lead.nombre}`);
+    const result = await createLead(lead);
+    
+    if (result.success) {
+      results.success.push(result);
+      console.log(`✅ Lead creado exitosamente (ID: ${result.data.lead?.id})`);
+    } else {
+      results.errors.push(result);
+      console.log(`❌ Error: ${result.error}`);
     }
+    
+    // Pausa breve entre requests
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
   
-  // Reporte final
-  console.log('\n' + '='.repeat(50));
-  console.log('📈 REPORTE FINAL:');
-  console.log('='.repeat(50));
-  console.log(`✅ Leads importados exitosamente: ${imported}`);
-  console.log(`❌ Errores encontrados: ${errors}`);
-  console.log(`📊 Total procesados: ${leadsData.length}`);
-  console.log(`🎯 Tasa de éxito: ${((imported / leadsData.length) * 100).toFixed(1)}%`);
+  // Resumen final
+  console.log('\n🎉 Importación completada!');
+  console.log(`✅ Exitosos: ${results.success.length}`);
+  console.log(`❌ Errores: ${results.errors.length}`);
   
-  if (errorDetails.length > 0) {
-    console.log('\n📋 DETALLE DE ERRORES:');
-    console.log('-'.repeat(30));
-    errorDetails.forEach((error, i) => {
-      console.log(`${i+1}. ${error}`);
+  if (results.errors.length > 0) {
+    console.log('\n💾 Leads con errores:');
+    results.errors.forEach((error, index) => {
+      console.log(`${index + 1}. ${error.lead.nombre} - ${error.error}`);
     });
   }
   
-  console.log('\n🏁 Proceso completado.');
+  return results;
 }
 
-// Ejecutar la importación
-importAllLeads().catch(console.error);
+// Función para modo dry-run (solo mostrar sin importar)
+function dryRun() {
+  console.log('🔍 MODO DRY-RUN: Solo mostrando datos, sin importar\n');
+  
+  console.log(`📊 Se procesarían ${LEAD_DATA.length} leads:\n`);
+  
+  LEAD_DATA.forEach((lead, index) => {
+    console.log(`${index + 1}. ${lead.nombre}`);
+    console.log(`   📞 ${lead.telefono}`);
+    console.log(`   🚗 ${lead.marca} ${lead.modelo}`);
+    console.log(`   💰 ${lead.formaPago}`);
+    console.log(`   📅 ${lead.fecha}`);
+    if (lead.infoUsado) console.log(`   📝 ${lead.infoUsado}`);
+    console.log('');
+  });
+}
+
+// Ejecutar según modo
+if (process.argv.includes('--dry-run')) {
+  dryRun();
+} else {
+  // Verificar configuración antes de importar
+  if (!CRM_CONFIG.email || CRM_CONFIG.email === 'admin@multimarca.com') {
+    console.log('❌ ERROR: Debes configurar tu email en CRM_CONFIG.email');
+    process.exit(1);
+  }
+  
+  if (!CRM_CONFIG.password || CRM_CONFIG.password === 'tu_password_aqui') {
+    console.log('❌ ERROR: Debes configurar tu password en CRM_CONFIG.password');
+    process.exit(1);
+  }
+  
+  importLeads()
+    .then((results) => {
+      if (results) {
+        console.log('\n✨ Proceso finalizado');
+        process.exit(results.errors?.length > 0 ? 1 : 0);
+      } else {
+        process.exit(1);
+      }
+    })
+    .catch((error) => {
+      console.error('💥 Error fatal:', error);
+      process.exit(1);
+    });
+}

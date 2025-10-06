@@ -16,46 +16,55 @@ const getAssignedVendorByBrand = async (marca) => {
     
     if (!supervisorId) {
       console.warn(`Marca no reconocida: ${marca}, usando asignación por defecto`);
-      return await getNextVendorId(); // fallback a la lógica anterior
+      return await getNextVendorId();
     }
 
-    // Buscar vendedores del equipo de esta supervisora
+    // 🔧 CORRECCIÓN: Buscar vendedores ordenados por cantidad de leads asignados
     const [vendors] = await pool.execute(
-      `SELECT id FROM users 
-       WHERE role = 'vendedor' 
-       AND active = 1 
-       AND reportsTo = ?
-       ORDER BY updated_at ASC, id ASC`,
+      `SELECT u.id, u.nombre,
+              COUNT(l.id) as lead_count,
+              COALESCE(MAX(l.created_at), '2000-01-01') as ultimo_lead
+       FROM users u
+       LEFT JOIN leads l ON l.assigned_to = u.id 
+                         AND l.created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+       WHERE u.role = 'vendedor' 
+         AND u.active = 1 
+         AND u.reportsTo = ?
+       GROUP BY u.id, u.nombre
+       ORDER BY lead_count ASC, ultimo_lead ASC, u.id ASC
+       LIMIT 1`,
       [supervisorId]
     );
 
     if (vendors.length === 0) {
       console.warn(`No hay vendedores activos para supervisora ID: ${supervisorId}`);
-      return await getNextVendorId(); // fallback
+      return await getNextVendorId();
     }
 
-    // Retornar el vendedor menos reciente del equipo
     const assignedVendor = vendors[0].id;
     
-    // Actualizar su timestamp para rotación
-    await touchUser(pool, assignedVendor);
-    
-    console.log(`Lead asignado a vendedor ${assignedVendor} del equipo de supervisora ${supervisorId} (marca: ${marca})`);
+    console.log(`✅ Lead asignado a vendedor ${assignedVendor} (${vendors[0].nombre}) del equipo de supervisora ${supervisorId} (marca: ${marca}) - Leads recientes: ${vendors[0].lead_count}`);
     
     return assignedVendor;
 
   } catch (error) {
-    console.error('Error en asignación por marca:', error);
-    return await getNextVendorId(); // fallback en caso de error
+    console.error('❌ Error en asignación por marca:', error);
+    return await getNextVendorId();
   }
 };
 
-// Función original (mantener como fallback)
+// Función original mejorada
 const getNextVendorId = async (conn = pool) => {
   try {
     const [rows] = await conn.execute(
-      `SELECT id FROM users WHERE role = 'vendedor' AND active = 1
-       ORDER BY updated_at ASC, id ASC LIMIT 1`
+      `SELECT u.id, COUNT(l.id) as lead_count
+       FROM users u
+       LEFT JOIN leads l ON l.assigned_to = u.id 
+                         AND l.created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+       WHERE u.role = 'vendedor' AND u.active = 1
+       GROUP BY u.id
+       ORDER BY lead_count ASC, u.id ASC 
+       LIMIT 1`
     );
     return rows.length ? rows[0].id : null;
   } catch (error) {
@@ -64,13 +73,10 @@ const getNextVendorId = async (conn = pool) => {
   }
 };
 
+// Ya no necesitas touchUser - la asignación es por conteo de leads
 const touchUser = async (conn, userId) => {
-  if (!userId) return;
-  try {
-    await conn.execute(`UPDATE users SET updated_at = NOW() WHERE id = ?`, [userId]);
-  } catch (error) {
-    console.error('Error actualizando usuario:', error);
-  }
+  // Función legacy - ya no se usa pero se mantiene por compatibilidad
+  return;
 };
 
 module.exports = { 
