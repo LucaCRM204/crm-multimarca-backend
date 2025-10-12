@@ -40,6 +40,7 @@ app.options('*', cors(corsOpts));
 // Rutas principales
 app.use('/api/auth', authRouter);
 app.use('/api/leads', leadsRouter);
+app.use('/api/presupuestos', require('./routes/presupuestos'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 if (usersRouter) app.use('/api/users', usersRouter);
 

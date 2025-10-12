@@ -55,9 +55,32 @@ async function setupDatabase() {
       )
     `);
 
+    // 3. Crear tabla presupuestos
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS presupuestos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        modelo VARCHAR(255) NOT NULL,
+        marca VARCHAR(100) NOT NULL,
+        marcaVehiculo ENUM('vw', 'fiat', 'peugeot', 'renault') NULL,
+        imagen_url TEXT,
+        precio_contado VARCHAR(100),
+        especificaciones_tecnicas TEXT,
+        planes_cuotas JSON,
+        bonificaciones TEXT,
+        anticipo VARCHAR(100),
+        activo BOOLEAN DEFAULT TRUE,
+        created_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_marca (marcaVehiculo),
+        INDEX idx_activo (activo)
+      )
+    `);
+
     console.log('✅ Tablas creadas');
 
-    // 3. Crear usuarios iniciales
+    // 4. Crear usuarios iniciales
     const passwords = {
       'admin@alluma.com': await bcrypt.hash('admin123', 10),
       'director@alluma.com': await bcrypt.hash('director123', 10),

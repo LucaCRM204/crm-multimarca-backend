@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('../db');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
 
 // GET /users  → lista usuarios
@@ -19,9 +20,13 @@ router.get('/', async (_req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { name, email, password = '123456', role = 'vendedor', reportsTo = null, active = 1 } = req.body || {};
+    
+    // HASHEAR LA CONTRASEÑA antes de guardar
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
     const [r] = await pool.query(
       'INSERT INTO users (name,email,password,role,reportsTo,active) VALUES (?,?,?,?,?,?)',
-      [name, email, password, role, reportsTo, active ? 1 : 0]
+      [name, email, hashedPassword, role, reportsTo, active ? 1 : 0]
     );
     const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active FROM users WHERE id=?', [r.insertId]);
     res.status(201).json(row[0]);
@@ -38,7 +43,19 @@ router.put('/:id', async (req, res) => {
     const fields = ['name','email','password','role','reportsTo','active'];
     const sets = [];
     const vals = [];
-    for (const f of fields) if (f in req.body) { sets.push(`${f}=?`); vals.push(req.body[f]); }
+    
+    for (const f of fields) {
+      if (f in req.body) { 
+        sets.push(`${f}=?`);
+        // Si es password, hashearla antes de guardar
+        if (f === 'password') {
+          vals.push(await bcrypt.hash(req.body[f], 10));
+        } else {
+          vals.push(req.body[f]);
+        }
+      }
+    }
+    
     if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
     vals.push(id);
     await pool.query(`UPDATE users SET ${sets.join(',')} WHERE id=?`, vals);
