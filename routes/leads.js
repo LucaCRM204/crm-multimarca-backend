@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
-const { getAssignedVendorByBrand } = require('../utils/assign');
+const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
 
 // Utilidad para mapear assigned_to -> vendedor
 const mapLead = (row) => ({
@@ -35,6 +35,72 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// 📊 VER ESTADO DEL ROUND-ROBIN
+router.get('/round-robin/status', authenticateToken, async (req, res) => {
+  try {
+    if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const status = await getRoundRobinStatus();
+    
+    res.json({ ok: true, ...status });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al obtener estado' });
+  }
+});
+
+// 🔄 RESETEAR ÍNDICE (solo owner)
+router.post('/round-robin/reset', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'owner') {
+      return res.status(403).json({ error: 'Solo el owner puede resetear' });
+    }
+
+    resetRoundRobinIndex();
+
+    res.json({ ok: true, message: 'Índice round-robin reseteado a 0' });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al resetear' });
+  }
+});
+
+// 📈 VER DISTRIBUCIÓN COMPLETA
+router.get('/distribution', authenticateToken, async (req, res) => {
+  try {
+    if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const [distribution] = await pool.execute(`
+      SELECT 
+        u.id,
+        u.name as nombre,
+        u.active,
+        COUNT(l.id) as total_leads,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as leads_30d,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as leads_7d,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 ELSE 0 END) as leads_hoy,
+        MAX(l.created_at) as ultimo_lead
+      FROM users u
+      LEFT JOIN leads l ON l.assigned_to = u.id
+      WHERE u.role = 'vendedor'
+      GROUP BY u.id, u.name, u.active
+      ORDER BY u.active DESC, total_leads DESC
+    `);
+
+    res.json({ ok: true, distribution });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al obtener distribución' });
+  }
+});
+
 // POST crear lead (desde el CRM)
 router.post('/', authenticateToken, async (req, res) => {
   try {
@@ -50,7 +116,8 @@ router.post('/', authenticateToken, async (req, res) => {
       estado = 'nuevo',
       fuente = 'otro',
       notas = '',
-      vendedor = null, // Si viene null, se asigna automáticamente
+      vendedor = null,
+      equipo = 'roberto'
     } = req.body;
 
     // Validar marca
@@ -58,23 +125,25 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
     }
 
-    // Asignación automática por marca si no viene vendedor específico
+    // Asignación automática si no viene vendedor específico
     let assigned_to = vendedor;
     if (!assigned_to) {
       assigned_to = await getAssignedVendorByBrand(marca);
-      console.log(`Lead auto-asignado por marca ${marca} al vendedor ${assigned_to}`);
+      console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+    } else {
+      console.log(`✅ Lead asignado manualmente al vendedor ${assigned_to}`);
     }
 
     const [result] = await pool.execute(
-      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha]
+      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at, created_by, equipo) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)`,
+      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, req.user.id, equipo]
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
     res.json({ ok: true, lead: mapLead(rows[0]) });
   } catch (error) {
-    console.error('Error POST /leads:', error);
+    console.error('❌ Error POST /leads:', error);
     res.status(500).json({ error: 'Error al crear lead' });
   }
 });
@@ -92,7 +161,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // Si viene 'vendedor', chequear permisos de rol
     if (Object.prototype.hasOwnProperty.call(updates, 'vendedor')) {
-      const me = req.user; // seteado por authenticateToken
+      const me = req.user;
       if (!['owner','director','gerente','supervisor'].includes(me.role)) {
         return res.status(403).json({ error: 'No autorizado para reasignar leads' });
       }

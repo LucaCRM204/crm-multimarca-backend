@@ -1,86 +1,113 @@
 // utils/assign.js
 const pool = require('../db');
 
-// Mapeo de marcas a IDs de supervisoras
-const BRAND_SUPERVISORS = {
-  'fiat': 5,     // Cecilia Caceres
-  'peugeot': 5,  // Cecilia Caceres
-  'vw': 14,      // Karina Martinez  
-  'renault': 14  // Karina Martinez
-};
+// 🎯 Índice único para TODOS los vendedores activos
+let globalRoundRobinIndex = 0;
 
-// Función principal: asigna por marca
+// Función principal: asigna de forma equitativa a TODOS los vendedores activos
 const getAssignedVendorByBrand = async (marca) => {
   try {
-    const supervisorId = BRAND_SUPERVISORS[marca?.toLowerCase()];
-    
-    if (!supervisorId) {
-      console.warn(`Marca no reconocida: ${marca}, usando asignación por defecto`);
-      return await getNextVendorId();
-    }
-
-    // 🔧 CORRECCIÓN: Buscar vendedores ordenados por cantidad de leads asignados
+    // 🔥 NUEVO: Obtener TODOS los vendedores activos, sin importar jerarquía
     const [vendors] = await pool.execute(
-      `SELECT u.id, u.nombre,
-              COUNT(l.id) as lead_count,
-              COALESCE(MAX(l.created_at), '2000-01-01') as ultimo_lead
+      `SELECT u.id, u.name, COUNT(l.id) as total_leads
        FROM users u
-       LEFT JOIN leads l ON l.assigned_to = u.id 
-                         AND l.created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
+       LEFT JOIN leads l ON l.assigned_to = u.id
        WHERE u.role = 'vendedor' 
-         AND u.active = 1 
-         AND u.reportsTo = ?
-       GROUP BY u.id, u.nombre
-       ORDER BY lead_count ASC, ultimo_lead ASC, u.id ASC
-       LIMIT 1`,
-      [supervisorId]
+         AND u.active = 1
+       GROUP BY u.id, u.name
+       ORDER BY u.id ASC`
     );
 
     if (vendors.length === 0) {
-      console.warn(`No hay vendedores activos para supervisora ID: ${supervisorId}`);
-      return await getNextVendorId();
+      console.warn('⚠️ No hay vendedores activos en el sistema');
+      return null;
     }
 
-    const assignedVendor = vendors[0].id;
+    // 🎯 ROUND-ROBIN: Rotar entre TODOS los vendedores activos
+    const selectedVendor = vendors[globalRoundRobinIndex % vendors.length];
     
-    console.log(`✅ Lead asignado a vendedor ${assignedVendor} (${vendors[0].nombre}) del equipo de supervisora ${supervisorId} (marca: ${marca}) - Leads recientes: ${vendors[0].lead_count}`);
+    // Incrementar para el próximo lead
+    globalRoundRobinIndex = (globalRoundRobinIndex + 1) % vendors.length;
+
+    console.log(`✅ Lead [${marca?.toUpperCase() || 'SIN MARCA'}] → Vendedor ${selectedVendor.id} (${selectedVendor.name})`);
+    console.log(`   📊 Tiene ${selectedVendor.total_leads} leads totales`);
+    console.log(`   🔄 Índice actual: ${globalRoundRobinIndex - 1}/${vendors.length - 1} | Próximo: ${globalRoundRobinIndex}`);
     
-    return assignedVendor;
+    return selectedVendor.id;
 
   } catch (error) {
-    console.error('❌ Error en asignación por marca:', error);
-    return await getNextVendorId();
-  }
-};
-
-// Función original mejorada
-const getNextVendorId = async (conn = pool) => {
-  try {
-    const [rows] = await conn.execute(
-      `SELECT u.id, COUNT(l.id) as lead_count
-       FROM users u
-       LEFT JOIN leads l ON l.assigned_to = u.id 
-                         AND l.created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-       WHERE u.role = 'vendedor' AND u.active = 1
-       GROUP BY u.id
-       ORDER BY lead_count ASC, u.id ASC 
-       LIMIT 1`
-    );
-    return rows.length ? rows[0].id : null;
-  } catch (error) {
-    console.error('Error en getNextVendorId:', error);
+    console.error('❌ Error en asignación:', error);
     return null;
   }
 };
 
-// Ya no necesitas touchUser - la asignación es por conteo de leads
+// Función alternativa (mismo comportamiento ahora)
+const getNextVendorId = async () => {
+  return await getAssignedVendorByBrand(null);
+};
+
+// 🆕 Resetear el índice (útil si agregas/quitas vendedores)
+const resetRoundRobinIndex = () => {
+  globalRoundRobinIndex = 0;
+  console.log('🔄 Índice round-robin reseteado a 0');
+};
+
+// 🆕 Ver el estado actual del round-robin
+const getRoundRobinStatus = async () => {
+  try {
+    const [vendors] = await pool.execute(
+      `SELECT 
+         u.id, 
+         u.name, 
+         u.active,
+         COUNT(l.id) as total_leads,
+         SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as leads_7d,
+         SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 ELSE 0 END) as leads_24h,
+         MAX(l.created_at) as ultimo_lead
+       FROM users u
+       LEFT JOIN leads l ON l.assigned_to = u.id
+       WHERE u.role = 'vendedor' AND u.active = 1
+       GROUP BY u.id, u.name, u.active
+       ORDER BY u.id ASC`
+    );
+
+    if (vendors.length === 0) {
+      return {
+        totalVendedoresActivos: 0,
+        indiceActual: globalRoundRobinIndex,
+        proximoVendedor: null,
+        todosLosVendedores: []
+      };
+    }
+
+    const nextVendor = vendors[globalRoundRobinIndex % vendors.length];
+
+    return {
+      totalVendedoresActivos: vendors.length,
+      indiceActual: globalRoundRobinIndex,
+      proximoVendedor: {
+        id: nextVendor.id,
+        nombre: nextVendor.name,
+        leads_totales: nextVendor.total_leads
+      },
+      todosLosVendedores: vendors
+    };
+
+  } catch (error) {
+    console.error('Error obteniendo estado:', error);
+    return null;
+  }
+};
+
+// Legacy - se mantiene por compatibilidad
 const touchUser = async (conn, userId) => {
-  // Función legacy - ya no se usa pero se mantiene por compatibilidad
   return;
 };
 
 module.exports = { 
   getAssignedVendorByBrand,
   getNextVendorId, 
-  touchUser 
+  touchUser,
+  resetRoundRobinIndex,
+  getRoundRobinStatus
 };

@@ -63,8 +63,13 @@ router.post('/bot-multimarca', async (req, res) => {
       marcaFinal = detectMarca(marca) || detectMarca(modelo) || 'vw';
     }
 
-    // 5) Asignación automática por marca y equipo
+    // 5) Asignación automática EQUITATIVA entre todos los vendedores activos
     const assigned_to = await getAssignedVendorByBrand(marcaFinal);
+
+    if (!assigned_to) {
+      console.error('⚠️ No se pudo asignar vendedor, no hay vendedores activos');
+      return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
+    }
 
     // 6) Inserción
     const [result] = await pool.execute(
@@ -75,7 +80,7 @@ router.post('/bot-multimarca', async (req, res) => {
       [nombre, telefono, modelo, marcaFinal, formaPago, fuente, notas, assigned_to]
     );
 
-    console.log(`Lead creado: ID ${result.insertId}, marca ${marcaFinal}, asignado a vendedor ${assigned_to}`);
+    console.log(`✅ Lead webhook creado: ID ${result.insertId}, marca ${marcaFinal}, asignado a vendedor ${assigned_to}`);
 
     // 7) Respuesta
     res.json({
@@ -87,7 +92,7 @@ router.post('/bot-multimarca', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error webhook bot:', error);
+    console.error('❌ Error webhook bot:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
