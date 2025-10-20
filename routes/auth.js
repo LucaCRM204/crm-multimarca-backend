@@ -26,17 +26,15 @@ router.post('/login', async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
     const user = rows[0];
     
-    // ❌ ELIMINA: if (!user || !user.active) return res.status(401).json({ error: 'Credenciales inválidas' });
-    
-    // ✅ REEMPLAZA CON ESTO:
+    // ✅ Solo verificar si el usuario existe, NO el estado active
     if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-    // ✅ Ahora genera el token independientemente del estado active
+    // ✅ Incluir active en el token JWT
     const token = jwt.sign(
-      { uid: user.id, role: user.role, id: user.id, email: user.email, active: user.active },  // ✅ Incluir active en el token
+      { uid: user.id, role: user.role, id: user.id, email: user.email, active: user.active },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -58,7 +56,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         name: user.name || user.email.split('@')[0],
         role: user.role,
-        active: user.active,  // ✅ Importante: incluir el estado
+        active: user.active,  // ✅ Incluir el estado
         reportsTo: user.reportsTo || null
       }
     });
@@ -71,7 +69,12 @@ router.post('/login', async (req, res) => {
 
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ id: req.user.uid, role: req.user.role, email: req.user.email, active: req.user.active });
+  res.json({ 
+    id: req.user.uid, 
+    role: req.user.role, 
+    email: req.user.email,
+    active: req.user.active  // ✅ Incluir active
+  });
 });
 
 // POST /api/auth/logout
