@@ -20,18 +20,23 @@ function requireAuth(req, res, next) {
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, allowInactiveUsers } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'missing_fields' });
 
     const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
     const user = rows[0];
-    if (!user || !user.active) return res.status(401).json({ error: 'Credenciales inválidas' });
+    
+    // ❌ ELIMINA: if (!user || !user.active) return res.status(401).json({ error: 'Credenciales inválidas' });
+    
+    // ✅ REEMPLAZA CON ESTO:
+    if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
+    // ✅ Ahora genera el token independientemente del estado active
     const token = jwt.sign(
-      { uid: user.id, role: user.role, id: user.id, email: user.email },
+      { uid: user.id, role: user.role, id: user.id, email: user.email, active: user.active },  // ✅ Incluir active en el token
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -44,7 +49,7 @@ router.post('/login', async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    // Devolver token Y datos del usuario
+    // ✅ Devolver token Y datos del usuario (incluyendo active)
     res.json({ 
       ok: true, 
       token: token,
@@ -53,7 +58,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         name: user.name || user.email.split('@')[0],
         role: user.role,
-        active: user.active,
+        active: user.active,  // ✅ Importante: incluir el estado
         reportsTo: user.reportsTo || null
       }
     });
@@ -66,7 +71,7 @@ router.post('/login', async (req, res) => {
 
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ id: req.user.uid, role: req.user.role, email: req.user.email });
+  res.json({ id: req.user.uid, role: req.user.role, email: req.user.email, active: req.user.active });
 });
 
 // POST /api/auth/logout
