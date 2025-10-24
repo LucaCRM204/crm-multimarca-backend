@@ -116,9 +116,19 @@ router.post('/', authenticateToken, async (req, res) => {
       estado = 'nuevo',
       fuente = 'otro',
       notas = '',
-      vendedor = null,
-      equipo = 'roberto'
+      vendedor = null
     } = req.body;
+
+    // 🔴 VALIDAR CAMPOS REQUERIDOS
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Campos requeridos faltantes',
+        details: { 
+          nombre: !nombre ? 'requerido' : 'ok', 
+          telefono: !telefono ? 'requerido' : 'ok' 
+        }
+      });
+    }
 
     // Validar marca
     if (!['vw', 'fiat', 'peugeot', 'renault'].includes(marca)) {
@@ -128,23 +138,48 @@ router.post('/', authenticateToken, async (req, res) => {
     // Asignación automática si no viene vendedor específico
     let assigned_to = vendedor;
     if (!assigned_to) {
-      assigned_to = await getAssignedVendorByBrand(marca);
-      console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+      try {
+        assigned_to = await getAssignedVendorByBrand(marca);
+        console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+      } catch (assignError) {
+        console.error('❌ Error en asignación automática:', assignError);
+        return res.status(500).json({ 
+          error: 'Error al asignar vendedor automáticamente',
+          details: assignError.message 
+        });
+      }
     } else {
       console.log(`✅ Lead asignado manualmente al vendedor ${assigned_to}`);
     }
 
+    // 🔴 LOGS DETALLADOS PARA DEBUG
+    console.log('📝 Creando lead con datos:', {
+      nombre, telefono, modelo, marca, formaPago, estado, 
+      fuente, assigned_to, created_by: req.user.id
+    });
+
     const [result] = await pool.execute(
-      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at, created_by, equipo) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)`,
-      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, req.user.id, equipo]
+      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
+      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, req.user.id]
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    
+    console.log('✅ Lead creado exitosamente, ID:', result.insertId);
+    
     res.json({ ok: true, lead: mapLead(rows[0]) });
   } catch (error) {
     console.error('❌ Error POST /leads:', error);
-    res.status(500).json({ error: 'Error al crear lead' });
+    console.error('❌ Body recibido:', req.body);
+    console.error('❌ Usuario:', req.user);
+    
+    res.status(500).json({ 
+      error: 'Error al crear lead',
+      message: error.message,
+      sqlMessage: error.sqlMessage || null,
+      code: error.code || null
+    });
   }
 });
 
