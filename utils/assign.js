@@ -1,40 +1,46 @@
 // utils/assign.js
 const pool = require('../db');
 
-// 🎯 Índice único para TODOS los vendedores activos
+// 🎯 EQUIPO ALFARO - IDs autorizados
+const EQUIPO_ALFARO = [25, 55, 24, 54, 47, 22, 59, 28, 52, 45, 48, 29, 44, 33, 35, 60, 51, 36, 56, 39];
+
+// 🎯 Índice único para el equipo Alfaro
 let globalRoundRobinIndex = 0;
 
-// Función principal: asigna de forma equitativa a TODOS los vendedores activos
+// Función principal: asigna de forma equitativa SOLO al equipo de Alfaro
 const getAssignedVendorByBrand = async (marca) => {
   try {
-    // 🔥 NUEVO: Obtener TODOS los vendedores activos, sin importar jerarquía
+    // 🔥 FILTRADO: Solo vendedores del equipo Alfaro que estén activos
     const [vendors] = await pool.execute(
       `SELECT u.id, u.name, COUNT(l.id) as total_leads
        FROM users u
        LEFT JOIN leads l ON l.assigned_to = u.id
        WHERE u.role = 'vendedor' 
          AND u.active = 1
+         AND u.id IN (?)
        GROUP BY u.id, u.name
-       ORDER BY u.id ASC`
+       ORDER BY u.id ASC`,
+      [EQUIPO_ALFARO]
     );
 
     if (vendors.length === 0) {
-      console.warn('⚠️ No hay vendedores activos en el sistema');
+      console.warn('⚠️ No hay vendedores del equipo Alfaro activos en el sistema');
       return null;
     }
 
-    // 🎯 ROUND-ROBIN: Rotar entre TODOS los vendedores activos
+    console.log(`👥 Vendedores del equipo Alfaro disponibles: ${vendors.length}`);
+    
+    // 🎯 ROUND-ROBIN: Rotar entre vendedores del equipo Alfaro
     const selectedVendor = vendors[globalRoundRobinIndex % vendors.length];
     
     // Incrementar para el próximo lead
     globalRoundRobinIndex = (globalRoundRobinIndex + 1) % vendors.length;
 
-    console.log(`✅ Lead [${marca?.toUpperCase() || 'SIN MARCA'}] → Vendedor ${selectedVendor.id} (${selectedVendor.name})`);
+    console.log(`✅ Lead [${marca?.toUpperCase() || 'SIN MARCA'}] → Vendedor ${selectedVendor.id} (${selectedVendor.name}) [EQUIPO ALFARO]`);
     console.log(`   📊 Tiene ${selectedVendor.total_leads} leads totales`);
     console.log(`   🔄 Índice actual: ${globalRoundRobinIndex - 1}/${vendors.length - 1} | Próximo: ${globalRoundRobinIndex}`);
     
     return selectedVendor.id;
-
   } catch (error) {
     console.error('❌ Error en asignación:', error);
     return null;
@@ -52,7 +58,7 @@ const resetRoundRobinIndex = () => {
   console.log('🔄 Índice round-robin reseteado a 0');
 };
 
-// 🆕 Ver el estado actual del round-robin
+// 🆕 Ver el estado actual del round-robin - SOLO EQUIPO ALFARO
 const getRoundRobinStatus = async () => {
   try {
     const [vendors] = await pool.execute(
@@ -66,13 +72,17 @@ const getRoundRobinStatus = async () => {
          MAX(l.created_at) as ultimo_lead
        FROM users u
        LEFT JOIN leads l ON l.assigned_to = u.id
-       WHERE u.role = 'vendedor' AND u.active = 1
+       WHERE u.role = 'vendedor' 
+         AND u.active = 1 
+         AND u.id IN (?)
        GROUP BY u.id, u.name, u.active
-       ORDER BY u.id ASC`
+       ORDER BY u.id ASC`,
+      [EQUIPO_ALFARO]
     );
 
     if (vendors.length === 0) {
       return {
+        equipo: 'Alfaro',
         totalVendedoresActivos: 0,
         indiceActual: globalRoundRobinIndex,
         proximoVendedor: null,
@@ -83,6 +93,7 @@ const getRoundRobinStatus = async () => {
     const nextVendor = vendors[globalRoundRobinIndex % vendors.length];
 
     return {
+      equipo: 'Alfaro',
       totalVendedoresActivos: vendors.length,
       indiceActual: globalRoundRobinIndex,
       proximoVendedor: {
@@ -92,7 +103,6 @@ const getRoundRobinStatus = async () => {
       },
       todosLosVendedores: vendors
     };
-
   } catch (error) {
     console.error('Error obteniendo estado:', error);
     return null;
