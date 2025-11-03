@@ -9,6 +9,60 @@ const mapLead = (row) => ({
   vendedor: row.assigned_to ?? null,
 });
 
+// 🔐 HELPER: Validar si el usuario puede asignar a un vendedor específico
+const canAssignToVendor = async (userId, userRole, targetVendorId) => {
+  // Owner y Director pueden asignar a cualquiera
+  if (['owner', 'dueño', 'director'].includes(userRole)) {
+    return true;
+  }
+
+  // Si intenta asignarse a sí mismo, siempre puede
+  if (userId === targetVendorId) {
+    return true;
+  }
+
+  // Obtener información del vendedor objetivo
+  const [targetUser] = await pool.execute(
+    'SELECT id, role, reportsTo FROM users WHERE id = ?',
+    [targetVendorId]
+  );
+
+  if (targetUser.length === 0) {
+    return false;
+  }
+
+  const target = targetUser[0];
+
+  // Gerente puede asignar a su equipo (supervisores y vendedores bajo él)
+  if (userRole === 'gerente') {
+    // Verificar si reporta directamente al gerente
+    if (target.reportsTo === userId) {
+      return true;
+    }
+    
+    // Verificar si reporta a un supervisor que reporta al gerente
+    if (target.reportsTo) {
+      const [supervisor] = await pool.execute(
+        'SELECT reportsTo FROM users WHERE id = ?',
+        [target.reportsTo]
+      );
+      if (supervisor.length > 0 && supervisor[0].reportsTo === userId) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
+  // Supervisor solo puede asignar a vendedores que reportan directamente a él
+  if (userRole === 'supervisor') {
+    return target.reportsTo === userId;
+  }
+
+  // Vendedor solo puede asignarse a sí mismo (ya verificado arriba)
+  return false;
+};
+
 // GET todos los leads
 router.get('/', authenticateToken, async (req, res) => {
   try {
@@ -135,27 +189,69 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
     }
 
-    // Asignación automática si no viene vendedor específico
+    // 🔐 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
     let assigned_to = vendedor;
-    if (!assigned_to) {
-      try {
-        assigned_to = await getAssignedVendorByBrand(marca);
-        console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
-      } catch (assignError) {
-        console.error('❌ Error en asignación automática:', assignError);
-        return res.status(500).json({ 
-          error: 'Error al asignar vendedor automáticamente',
-          details: assignError.message 
+
+    if (assigned_to) {
+      // Si se especifica un vendedor, validar permisos
+      const hasPermission = await canAssignToVendor(req.user.id, req.user.role, assigned_to);
+      
+      if (!hasPermission) {
+        return res.status(403).json({ 
+          error: 'No tienes permisos para asignar leads a este vendedor',
+          details: 'Solo puedes crear leads para ti mismo o para tu equipo directo'
         });
       }
+      
+      console.log(`✅ Lead asignado manualmente al vendedor ${assigned_to} (validado)`);
+      
     } else {
-      console.log(`✅ Lead asignado manualmente al vendedor ${assigned_to}`);
+      // Asignación automática según el rol
+      if (req.user.role === 'vendedor') {
+        // Los vendedores se auto-asignan
+        assigned_to = req.user.id;
+        console.log(`🎯 Lead auto-asignado al vendedor ${assigned_to} (creador)`);
+        
+      } else if (['supervisor', 'gerente'].includes(req.user.role)) {
+        // Supervisores y Gerentes: asignar por round-robin dentro de su equipo
+        try {
+          assigned_to = await getAssignedVendorByBrand(marca);
+          
+          // Validar que el vendedor asignado pertenece a su equipo
+          const hasPermission = await canAssignToVendor(req.user.id, req.user.role, assigned_to);
+          if (!hasPermission) {
+            // Si el round-robin asignó a alguien fuera del equipo, asignar al creador
+            assigned_to = req.user.id;
+            console.log(`⚠️ Round-robin asignó fuera del equipo, reasignando al creador ${assigned_to}`);
+          } else {
+            console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+          }
+        } catch (assignError) {
+          console.error('❌ Error en asignación automática:', assignError);
+          // Fallback: asignar al creador
+          assigned_to = req.user.id;
+        }
+        
+      } else {
+        // Owner y Director: usar round-robin normal
+        try {
+          assigned_to = await getAssignedVendorByBrand(marca);
+          console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+        } catch (assignError) {
+          console.error('❌ Error en asignación automática:', assignError);
+          return res.status(500).json({ 
+            error: 'Error al asignar vendedor automáticamente',
+            details: assignError.message 
+          });
+        }
+      }
     }
 
     // 🔴 LOGS DETALLADOS PARA DEBUG
     console.log('📝 Creando lead con datos:', {
       nombre, telefono, modelo, marca, formaPago, estado, 
-      fuente, assigned_to, created_by: req.user.id
+      fuente, assigned_to, created_by: req.user.id, 
+      creator_role: req.user.role
     });
 
     const [result] = await pool.execute(
@@ -194,11 +290,21 @@ router.put('/:id', authenticateToken, async (req, res) => {
       'fuente', 'notas', 'assigned_to', 'vendedor', 'infoUsado', 'entrega', 'fecha'
     ];
 
-    // Si viene 'vendedor', chequear permisos de rol
-    if (Object.prototype.hasOwnProperty.call(updates, 'vendedor')) {
-      const me = req.user;
-      if (!['owner','director','gerente','supervisor'].includes(me.role)) {
-        return res.status(403).json({ error: 'No autorizado para reasignar leads' });
+    // Si viene 'vendedor' o 'assigned_to', validar permisos jerárquicos
+    if (Object.prototype.hasOwnProperty.call(updates, 'vendedor') || 
+        Object.prototype.hasOwnProperty.call(updates, 'assigned_to')) {
+      
+      const newVendorId = updates.vendedor || updates.assigned_to;
+      
+      if (newVendorId !== null && newVendorId !== undefined) {
+        const hasPermission = await canAssignToVendor(req.user.id, req.user.role, newVendorId);
+        
+        if (!hasPermission) {
+          return res.status(403).json({ 
+            error: 'No tienes permisos para asignar leads a este vendedor',
+            details: 'Solo puedes asignar leads a ti mismo o a tu equipo directo'
+          });
+        }
       }
     }
 
