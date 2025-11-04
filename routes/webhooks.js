@@ -97,4 +97,63 @@ router.post('/bot-multimarca', async (req, res) => {
   }
 });
 
+// ========= Webhook: La Comer (marca directa desde Zapier) =========
+router.post('/lacomer', async (req, res) => {
+  try {
+    const body = req.body || {};
+    
+    // Limpio campos
+    let nombre    = cleanText(body.nombre);
+    let telefono  = normalizePhone(body.telefono);
+    let modelo    = cleanText(body.modelo || 'Consultar');
+    let marca     = cleanText(body.marca || 'vw').toLowerCase(); // Default VW si no viene
+    let formaPago = cleanText(body.formaPago || 'Consultar');
+    let notas     = cleanText(body.notas || '');
+    const fuente  = 'lacomer';
+    
+    // Validación
+    if (!nombre || !telefono) {
+      return res.status(400).json({ error: 'Nombre y teléfono son requeridos' });
+    }
+
+    // Validar marca - si no es válida, usar VW
+    const validMarcas = ['vw', 'fiat', 'peugeot', 'renault'];
+    if (!validMarcas.includes(marca)) {
+      console.log(`⚠️ Marca "${marca}" no válida, usando VW por default`);
+      marca = 'vw';
+    }
+
+    // Asignación automática por marca
+    const assigned_to = await getAssignedVendorByBrand(marca);
+
+    if (!assigned_to) {
+      console.error('⚠️ No hay vendedores activos para la marca:', marca);
+      return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
+    }
+
+    // Inserción
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+         (nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to, estado, created_at)
+       VALUES
+         (?,      ?,        ?,      ?,     ?,         ?,      ?,     ?,           'nuevo', NOW())`,
+      [nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to]
+    );
+
+    console.log(`✅ Lead La Comer creado: ID ${result.insertId}, marca ${marca}, asignado a vendedor ${assigned_to}`);
+
+    res.json({
+      ok: true,
+      leadId: result.insertId,
+      assignedTo: assigned_to,
+      marca: marca,
+      message: 'Lead creado correctamente',
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook La Comer:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 module.exports = router;
