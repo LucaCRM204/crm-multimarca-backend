@@ -155,6 +155,66 @@ router.get('/distribution', authenticateToken, async (req, res) => {
   }
 });
 
+// ðŸ"ˆ VER DISTRIBUCIÃ"N COMPLETA
+router.get('/distribution', authenticateToken, async (req, res) => {
+  try {
+    if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const [distribution] = await pool.execute(`
+      SELECT 
+        u.id,
+        u.name as nombre,
+        u.active,
+        COUNT(l.id) as total_leads,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as leads_30d,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as leads_7d,
+        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 ELSE 0 END) as leads_hoy,
+        MAX(l.created_at) as ultimo_lead
+      FROM users u
+      LEFT JOIN leads l ON l.assigned_to = u.id
+      WHERE u.role = 'vendedor'
+      GROUP BY u.id, u.name, u.active
+      ORDER BY u.active DESC, total_leads DESC
+    `);
+
+    res.json({ ok: true, distribution });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al obtener distribuciÃ³n' });
+  }
+});
+
+// 🆕 VER LEADS SIN ASIGNAR (sin marca o sin vendedor)
+router.get('/unassigned', authenticateToken, async (req, res) => {
+  try {
+    if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const [rows] = await pool.execute(`
+      SELECT * FROM leads 
+      WHERE marca IS NULL OR assigned_to IS NULL
+      ORDER BY created_at DESC
+    `);
+    
+    const leads = rows.map(mapLead);
+    
+    res.json({ 
+      ok: true, 
+      leads,
+      count: leads.length,
+      message: `${leads.length} leads sin asignar encontrados`
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al obtener leads sin asignar' });
+  }
+});
+
 // POST crear lead (desde el CRM)
 router.post('/', authenticateToken, async (req, res) => {
   try {
@@ -289,6 +349,20 @@ router.put('/:id', authenticateToken, async (req, res) => {
       'nombre', 'telefono', 'modelo', 'marca', 'formaPago', 'estado',
       'fuente', 'notas', 'assigned_to', 'vendedor', 'infoUsado', 'entrega', 'fecha'
     ];
+
+    // 🔥 NUEVO: Si se está asignando marca y NO viene vendedor, asignar automáticamente
+    if (updates.marca && !updates.vendedor && !updates.assigned_to) {
+      try {
+        const autoVendor = await getAssignedVendorByBrand(updates.marca);
+        if (autoVendor) {
+          updates.assigned_to = autoVendor;
+          console.log(`🎯 Lead ${id}: marca ${updates.marca} asignada, vendedor auto-asignado: ${autoVendor}`);
+        }
+      } catch (error) {
+        console.error('⚠️ Error en auto-asignación:', error);
+        // Continuar sin asignar vendedor
+      }
+    }
 
     // Si viene 'vendedor' o 'assigned_to', validar permisos jerárquicos
     if (Object.prototype.hasOwnProperty.call(updates, 'vendedor') || 
