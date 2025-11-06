@@ -9,7 +9,7 @@ const mapLead = (row) => ({
   vendedor: row.assigned_to ?? null,
 });
 
-// 🔐 HELPER: Validar si el usuario puede asignar a un vendedor específico
+// 🔍 HELPER: Validar si el usuario puede asignar a un vendedor específico
 const canAssignToVendor = async (userId, userRole, targetVendorId) => {
   // Owner y Director pueden asignar a cualquiera
   if (['owner', 'dueño', 'director'].includes(userRole)) {
@@ -155,38 +155,6 @@ router.get('/distribution', authenticateToken, async (req, res) => {
   }
 });
 
-// ðŸ"ˆ VER DISTRIBUCIÃ"N COMPLETA
-router.get('/distribution', authenticateToken, async (req, res) => {
-  try {
-    if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'No autorizado' });
-    }
-
-    const [distribution] = await pool.execute(`
-      SELECT 
-        u.id,
-        u.name as nombre,
-        u.active,
-        COUNT(l.id) as total_leads,
-        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as leads_30d,
-        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as leads_7d,
-        SUM(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY) THEN 1 ELSE 0 END) as leads_hoy,
-        MAX(l.created_at) as ultimo_lead
-      FROM users u
-      LEFT JOIN leads l ON l.assigned_to = u.id
-      WHERE u.role = 'vendedor'
-      GROUP BY u.id, u.name, u.active
-      ORDER BY u.active DESC, total_leads DESC
-    `);
-
-    res.json({ ok: true, distribution });
-
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Error al obtener distribuciÃ³n' });
-  }
-});
-
 // 🆕 VER LEADS SIN ASIGNAR (sin marca o sin vendedor)
 router.get('/unassigned', authenticateToken, async (req, res) => {
   try {
@@ -230,7 +198,8 @@ router.post('/', authenticateToken, async (req, res) => {
       estado = 'nuevo',
       fuente = 'otro',
       notas = '',
-      vendedor = null
+      vendedor = null,
+      assigned_to = null  // ✅ NUEVO: Aceptar assigned_to también
     } = req.body;
 
     // 🔴 VALIDAR CAMPOS REQUERIDOS
@@ -249,54 +218,61 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
     }
 
-    // 🔐 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
-    let assigned_to = vendedor;
+    // 🔍 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
+    // ✅ CAMBIO CRÍTICO: Priorizar assigned_to si viene del request (bots de WhatsApp)
+    let finalAssignedTo = assigned_to || vendedor;
 
-    if (assigned_to) {
-      // Si se especifica un vendedor, validar permisos
-      const hasPermission = await canAssignToVendor(req.user.id, req.user.role, assigned_to);
+    if (finalAssignedTo) {
+      // ✅ Si viene assigned_to o vendedor, RESPETARLO (para bots)
+      // Solo validar permisos si NO viene de una fuente automática
+      const isFromBot = fuente && (fuente.includes('whatsapp') || fuente.includes('bot'));
       
-      if (!hasPermission) {
-        return res.status(403).json({ 
-          error: 'No tienes permisos para asignar leads a este vendedor',
-          details: 'Solo puedes crear leads para ti mismo o para tu equipo directo'
-        });
+      if (!isFromBot) {
+        // Validar permisos solo si NO es de un bot
+        const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
+        
+        if (!hasPermission) {
+          return res.status(403).json({ 
+            error: 'No tienes permisos para asignar leads a este vendedor',
+            details: 'Solo puedes crear leads para ti mismo o para tu equipo directo'
+          });
+        }
       }
       
-      console.log(`✅ Lead asignado manualmente al vendedor ${assigned_to} (validado)`);
+      console.log(`✅ Lead asignado a vendedor ${finalAssignedTo} ${isFromBot ? '(BOT)' : '(manual validado)'}`);
       
     } else {
-      // Asignación automática según el rol
+      // Asignación automática según el rol (SOLO si no viene assigned_to)
       if (req.user.role === 'vendedor') {
         // Los vendedores se auto-asignan
-        assigned_to = req.user.id;
-        console.log(`🎯 Lead auto-asignado al vendedor ${assigned_to} (creador)`);
+        finalAssignedTo = req.user.id;
+        console.log(`🎯 Lead auto-asignado al vendedor ${finalAssignedTo} (creador)`);
         
       } else if (['supervisor', 'gerente'].includes(req.user.role)) {
         // Supervisores y Gerentes: asignar por round-robin dentro de su equipo
         try {
-          assigned_to = await getAssignedVendorByBrand(marca);
+          finalAssignedTo = await getAssignedVendorByBrand(marca);
           
           // Validar que el vendedor asignado pertenece a su equipo
-          const hasPermission = await canAssignToVendor(req.user.id, req.user.role, assigned_to);
+          const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
           if (!hasPermission) {
             // Si el round-robin asignó a alguien fuera del equipo, asignar al creador
-            assigned_to = req.user.id;
-            console.log(`⚠️ Round-robin asignó fuera del equipo, reasignando al creador ${assigned_to}`);
+            finalAssignedTo = req.user.id;
+            console.log(`⚠️ Round-robin asignó fuera del equipo, reasignando al creador ${finalAssignedTo}`);
           } else {
-            console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+            console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${finalAssignedTo}`);
           }
         } catch (assignError) {
           console.error('❌ Error en asignación automática:', assignError);
           // Fallback: asignar al creador
-          assigned_to = req.user.id;
+          finalAssignedTo = req.user.id;
         }
         
       } else {
-        // Owner y Director: usar round-robin normal
+        // Owner y Director: usar round-robin normal (SOLO si no viene assigned_to)
         try {
-          assigned_to = await getAssignedVendorByBrand(marca);
-          console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${assigned_to}`);
+          finalAssignedTo = await getAssignedVendorByBrand(marca);
+          console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${finalAssignedTo}`);
         } catch (assignError) {
           console.error('❌ Error en asignación automática:', assignError);
           return res.status(500).json({ 
@@ -308,21 +284,22 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     // 🔴 LOGS DETALLADOS PARA DEBUG
-    console.log('📝 Creando lead con datos:', {
+    console.log('🔍 Creando lead con datos:', {
       nombre, telefono, modelo, marca, formaPago, estado, 
-      fuente, assigned_to, created_by: req.user.id, 
-      creator_role: req.user.role
+      fuente, assigned_to: finalAssignedTo, created_by: req.user.id, 
+      creator_role: req.user.role,
+      from_bot: fuente && (fuente.includes('whatsapp') || fuente.includes('bot'))
     });
 
     const [result] = await pool.execute(
       `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at, created_by) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
-      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, req.user.id]
+      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, finalAssignedTo, infoUsado, entrega, fecha, req.user.id]
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
     
-    console.log('✅ Lead creado exitosamente, ID:', result.insertId);
+    console.log('✅ Lead creado exitosamente, ID:', result.insertId, 'Asignado a:', finalAssignedTo);
     
     res.json({ ok: true, lead: mapLead(rows[0]) });
   } catch (error) {
