@@ -132,67 +132,6 @@ async function assignVendorInTeam(equipoId) {
   return vendedor.id;
 }
 
-// ========= Webhook: bot multimarca =========
-router.post('/bot-multimarca', async (req, res) => {
-  try {
-    // 1) Tomo crudo lo que llega
-    const body = req.body || {};
-    // 2) Limpio campos que vienen con el label del formulario
-    let nombre    = cleanText(body.nombre);
-    let telefono  = normalizePhone(body.telefono);
-    let modelo    = cleanText(body.modelo || 'Consultar');
-    let marca     = cleanText(body.marca || '');
-    let formaPago = cleanText(body.formaPago || 'Consultar');
-    let notas     = cleanText(body.notas || '');
-    const fuente  = cleanText(body.fuente || 'bot_multimarca');
-
-    // 3) Validación después de limpiar
-    if (!nombre || !telefono) {
-      return res.status(400).json({ error: 'Nombre y teléfono son requeridos' });
-    }
-
-    // 4) Marca final: si no viene como código válido, detecto por texto
-    const validMarcas = ['vw', 'fiat', 'peugeot', 'renault'];
-    let marcaFinal = validMarcas.includes(marca.toLowerCase()) ? marca.toLowerCase() : null;
-    if (!marcaFinal) {
-      // pruebo detectar por modelo/marca textual
-      marcaFinal = detectMarca(marca) || detectMarca(modelo) || 'vw';
-    }
-
-    // 5) Asignación automática EQUITATIVA entre todos los vendedores activos
-    const assigned_to = await getAssignedVendorByBrand(marcaFinal);
-
-    if (!assigned_to) {
-      console.error('⚠️ No se pudo asignar vendedor, no hay vendedores activos');
-      return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
-    }
-
-    // 6) Inserción
-    const [result] = await pool.execute(
-      `INSERT INTO leads
-         (nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to, estado, created_at)
-       VALUES
-         (?,      ?,        ?,      ?,     ?,         ?,      ?,     ?,           'nuevo', NOW())`,
-      [nombre, telefono, modelo, marcaFinal, formaPago, fuente, notas, assigned_to]
-    );
-
-    console.log(`✅ Lead webhook creado: ID ${result.insertId}, marca ${marcaFinal}, asignado a vendedor ${assigned_to}`);
-
-    // 7) Respuesta
-    res.json({
-      ok: true,
-      leadId: result.insertId,
-      assignedTo: assigned_to,
-      marca: marcaFinal,
-      message: 'Lead creado correctamente',
-    });
-
-  } catch (error) {
-    console.error('❌ Error webhook bot:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 // ========= Webhook: La Comer (con soporte para equipos jerárquicos) =========
 router.post('/lacomer', async (req, res) => {
   try {
