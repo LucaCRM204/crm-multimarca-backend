@@ -39,20 +39,10 @@ const upload = multer({
 });
 
 // =============================================
-// FIX: Importar authMiddleware correctamente
+// Importar middleware de autenticación
 // =============================================
-const authModule = require('../middleware/auth');
-// Manejar ambos casos: exportado como función o como objeto con propiedad
-const authMiddleware = typeof authModule === 'function' 
-  ? authModule 
-  : (authModule.authMiddleware || authModule.default || authModule.auth);
-
-// Verificar que tenemos una función válida
-if (typeof authMiddleware !== 'function') {
-  console.error('ERROR: authMiddleware no es una función válida');
-  console.error('Tipo recibido:', typeof authModule);
-  console.error('Propiedades disponibles:', Object.keys(authModule));
-}
+const { authenticateToken } = require('../middleware/auth');
+const authMiddleware = authenticateToken;
 
 // Estados posibles
 const ESTADOS = {
