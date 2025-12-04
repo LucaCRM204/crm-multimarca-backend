@@ -1,10 +1,12 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING v5
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING v6
  * ============================================
- * CAMBIOS v5:
- * - Al rechazar supervisor: Lead pasa a 'rechazado_supervisor'
- * - Al rechazar scoring: Lead pasa a 'rechazado_scoring'
+ * CAMBIOS v6:
+ * - Sistema de mensajes internos entre Scoring y Supervisores
+ * - Guardar fecha/hora cuando se observa una venta
+ * - Endpoint para marcar observación como resuelta
+ * - Notificaciones de mensajes nuevos
  */
 
 const express = require('express');
@@ -125,6 +127,17 @@ async function cambiarEstadoLead(pool, leadId, nuevoEstado, motivo) {
         notas = CONCAT(IFNULL(notas, ''), '\n[', ?, '] Estado cambiado automáticamente a ', ?, ': ', ?)
     WHERE id = ?
   `, [nuevoEstado, timestamp, nuevoEstado, motivo || 'Cambio desde scoring', leadId]);
+}
+
+// ============================================
+// HELPER: Crear mensaje interno
+// ============================================
+async function crearMensajeInterno(pool, ventaId, remitenteId, destinatarioId, mensaje, tipo) {
+  const [result] = await pool.query(`
+    INSERT INTO scoring_mensajes (venta_id, remitente_id, destinatario_id, mensaje, tipo)
+    VALUES (?, ?, ?, ?, ?)
+  `, [ventaId, remitenteId, destinatarioId, mensaje, tipo]);
+  return result.insertId;
 }
 
 // ============================================
@@ -281,7 +294,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 3. OBTENER VENTA POR ID (con historial)
+// 3. OBTENER VENTA POR ID (con historial y mensajes)
 // ============================================
 router.get('/:id', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -309,6 +322,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'No tenés acceso a esta venta' });
     }
     
+    // Obtener notas/historial
     const [notas] = await pool.query(`
       SELECT sn.*, u.name as usuario_nombre
       FROM scoring_notas sn
@@ -317,7 +331,19 @@ router.get('/:id', authMiddleware, async (req, res) => {
       ORDER BY sn.created_at DESC
     `, [id]);
     
-    res.json({ ok: true, venta, notas });
+    // Obtener mensajes internos
+    const [mensajes] = await pool.query(`
+      SELECT 
+        sm.*,
+        u_rem.name as remitente_nombre,
+        u_rem.role as remitente_rol
+      FROM scoring_mensajes sm
+      LEFT JOIN users u_rem ON sm.remitente_id = u_rem.id
+      WHERE sm.venta_id = ?
+      ORDER BY sm.created_at ASC
+    `, [id]);
+    
+    res.json({ ok: true, venta, notas, mensajes });
     
   } catch (error) {
     console.error('Error al obtener venta:', error);
@@ -425,9 +451,7 @@ router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
       WHERE id = ?
     `, [motivo, userId, id]);
     
-    // ============================================
     // CAMBIAR ESTADO DEL LEAD A 'rechazado_supervisor'
-    // ============================================
     await cambiarEstadoLead(
       pool, 
       venta.lead_id, 
@@ -453,7 +477,6 @@ router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
         nuevoEstado: 'rechazada' 
       });
       
-      // Notificar cambio de lead
       io.emit('lead:updated', { leadId: venta.lead_id });
     }
     
@@ -516,13 +539,13 @@ router.post('/:id/tomar', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 6. CAMBIAR ESTADO (Scoring/Cobranza) - CON CAMBIO DE LEAD SI RECHAZA
+// 6. CAMBIAR ESTADO (Scoring/Cobranza) - CON MENSAJES EN OBSERVACIONES
 // ============================================
 router.post('/:id/estado', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const io = req.app.get('io');
   const { id } = req.params;
-  const { id: userId, role } = req.user;
+  const { id: userId, role, name: userName } = req.user;
   const { nuevo_estado, notas, motivo_rechazo } = req.body;
   
   try {
@@ -569,14 +592,52 @@ router.post('/:id/estado', authMiddleware, async (req, res) => {
     let updateQuery = `UPDATE ventas_scoring SET estado = ?`;
     const updateParams = [nuevo_estado];
     
+    // GUARDAR FECHA/HORA EN NOTAS CON FORMATO ESPECIAL
     if (notas) {
-      const timestamp = new Date().toISOString();
-      updateQuery += `, notas_scoring = CONCAT(IFNULL(notas_scoring, ''), '\n[', ?, '] ', ?)`;
-      updateParams.push(timestamp, notas);
+      const timestamp = new Date().toLocaleString('es-AR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      const notaFormateada = `[${timestamp}] ${userName || 'Scoring'}: ${notas}`;
+      updateQuery += `, notas_scoring = CONCAT(IFNULL(notas_scoring, ''), '\n', ?)`;
+      updateParams.push(notaFormateada);
     }
+    
     if (motivo_rechazo) {
       updateQuery += `, motivo_rechazo = ?`;
       updateParams.push(motivo_rechazo);
+    }
+    
+    // SI ES OBSERVACIÓN, GUARDAR TIMESTAMP Y CREAR MENSAJE
+    if (nuevo_estado === ESTADOS.OBSERVADA) {
+      updateQuery += `, observada_at = NOW(), observada_por = ?`;
+      updateParams.push(userId);
+      
+      // Crear mensaje interno automático para supervisor
+      await crearMensajeInterno(
+        pool, 
+        id, 
+        userId, 
+        venta.supervisor_id,
+        notas,
+        'observacion'
+      );
+      
+      // También para vendedor si es distinto
+      if (venta.vendedor_id && venta.vendedor_id !== venta.supervisor_id) {
+        await crearMensajeInterno(
+          pool, 
+          id, 
+          userId, 
+          venta.vendedor_id,
+          notas,
+          'observacion'
+        );
+      }
     }
     
     // Timestamps específicos
@@ -599,9 +660,7 @@ router.post('/:id/estado', authMiddleware, async (req, res) => {
     
     await pool.query(updateQuery, updateParams);
     
-    // ============================================
     // SI ES RECHAZO DE SCORING, CAMBIAR ESTADO DEL LEAD
-    // ============================================
     if (nuevo_estado === ESTADOS.RECHAZADA) {
       await cambiarEstadoLead(
         pool, 
@@ -610,7 +669,6 @@ router.post('/:id/estado', authMiddleware, async (req, res) => {
         `Rechazado por scoring: ${motivo_rechazo}`
       );
       
-      // Notificar cambio de lead
       if (io) {
         io.emit('lead:updated', { leadId: venta.lead_id });
       }
@@ -649,7 +707,183 @@ router.post('/:id/estado', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 7. ACTUALIZAR MONTOS (Cobranza)
+// 7. ENVIAR MENSAJE INTERNO (Supervisor/Vendedor responde a Scoring)
+// ============================================
+router.post('/:id/mensaje', authMiddleware, async (req, res) => {
+  const pool = req.app.get('db');
+  const io = req.app.get('io');
+  const { id } = req.params;
+  const { id: userId, role, name: userName } = req.user;
+  const { mensaje, tipo } = req.body;
+  
+  if (!mensaje || !mensaje.trim()) {
+    return res.status(400).json({ error: 'El mensaje es obligatorio' });
+  }
+  
+  try {
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
+    
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    
+    // Verificar que el usuario tiene acceso a esta venta
+    const tieneAcceso = 
+      ROLES_VER_TODO.includes(role) ||
+      venta.vendedor_id === userId ||
+      venta.supervisor_id === userId ||
+      venta.scoring_user_id === userId ||
+      ['jefe_scoring', 'scoring'].includes(role);
+    
+    if (!tieneAcceso) {
+      return res.status(403).json({ error: 'No tenés acceso a esta venta' });
+    }
+    
+    // Determinar el tipo de mensaje
+    let tipoMensaje = tipo || 'sistema';
+    if (ROLES_AUTORIZACION.includes(role)) {
+      tipoMensaje = tipo === 'resuelto' ? 'resuelto' : 'respuesta_supervisor';
+    } else if (role === 'vendedor') {
+      tipoMensaje = 'respuesta_vendedor';
+    } else if (ROLES_SCORING.includes(role)) {
+      tipoMensaje = 'observacion';
+    }
+    
+    // Determinar destinatario
+    let destinatarioId = null;
+    if (ROLES_AUTORIZACION.includes(role) || role === 'vendedor') {
+      // Supervisor o vendedor responde a scoring
+      destinatarioId = venta.scoring_user_id;
+    } else if (ROLES_SCORING.includes(role)) {
+      // Scoring responde a supervisor
+      destinatarioId = venta.supervisor_id;
+    }
+    
+    // Crear el mensaje
+    const mensajeId = await crearMensajeInterno(pool, id, userId, destinatarioId, mensaje, tipoMensaje);
+    
+    // Guardar en notas de la venta también (para historial)
+    const timestamp = new Date().toLocaleString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    
+    await crearNota(pool, id, userId, 'mensaje_interno', null, null, `[${timestamp}] ${userName}: ${mensaje}`);
+    
+    // Si es mensaje de "resuelto", actualizar la venta y notificar a scoring
+    if (tipoMensaje === 'resuelto') {
+      await pool.query(`
+        UPDATE ventas_scoring 
+        SET resuelta_at = NOW(), resuelta_por = ?
+        WHERE id = ?
+      `, [userId, id]);
+      
+      // Crear alerta para el usuario de scoring
+      if (venta.scoring_user_id) {
+        await crearAlerta(
+          pool, 
+          id, 
+          venta.scoring_user_id, 
+          'observacion_resuelta', 
+          `La observación de la venta #${id} fue resuelta por ${userName}: ${mensaje}`
+        );
+        
+        if (io) {
+          io.to(`user_${venta.scoring_user_id}`).emit('scoring:alerta', {
+            tipo: 'observacion_resuelta',
+            ventaId: id,
+            mensaje: `Observación resuelta: ${mensaje}`
+          });
+        }
+      }
+    } else {
+      // Notificar nuevo mensaje
+      if (destinatarioId && io) {
+        await crearAlerta(pool, id, destinatarioId, 'mensaje_nuevo', `Nuevo mensaje en venta #${id}: ${mensaje.substring(0, 50)}...`);
+        
+        io.to(`user_${destinatarioId}`).emit('scoring:mensaje_nuevo', {
+          ventaId: id,
+          mensaje,
+          remitente: userName,
+          tipo: tipoMensaje
+        });
+      }
+    }
+    
+    res.json({ 
+      ok: true, 
+      mensajeId,
+      mensaje: 'Mensaje enviado correctamente' 
+    });
+    
+  } catch (error) {
+    console.error('Error al enviar mensaje:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 8. OBTENER MENSAJES DE UNA VENTA
+// ============================================
+router.get('/:id/mensajes', authMiddleware, async (req, res) => {
+  const pool = req.app.get('db');
+  const { id } = req.params;
+  const { id: userId, role } = req.user;
+  
+  try {
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
+    
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    
+    // Verificar acceso
+    const tieneAcceso = 
+      ROLES_VER_TODO.includes(role) ||
+      venta.vendedor_id === userId ||
+      venta.supervisor_id === userId ||
+      venta.scoring_user_id === userId ||
+      ['jefe_scoring', 'scoring', 'cobranza'].includes(role);
+    
+    if (!tieneAcceso) {
+      return res.status(403).json({ error: 'No tenés acceso a esta venta' });
+    }
+    
+    const [mensajes] = await pool.query(`
+      SELECT 
+        sm.*,
+        u_rem.name as remitente_nombre,
+        u_rem.role as remitente_rol
+      FROM scoring_mensajes sm
+      LEFT JOIN users u_rem ON sm.remitente_id = u_rem.id
+      WHERE sm.venta_id = ?
+      ORDER BY sm.created_at ASC
+    `, [id]);
+    
+    // Marcar como leídos los mensajes dirigidos al usuario actual
+    await pool.query(`
+      UPDATE scoring_mensajes 
+      SET leido = TRUE, leido_at = NOW()
+      WHERE venta_id = ? AND destinatario_id = ? AND leido = FALSE
+    `, [id, userId]);
+    
+    res.json(mensajes);
+    
+  } catch (error) {
+    console.error('Error al obtener mensajes:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 9. ACTUALIZAR MONTOS (Cobranza)
 // ============================================
 router.put('/:id/montos', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -710,7 +944,7 @@ router.put('/:id/montos', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 8. OBTENER MIS ALERTAS
+// 10. OBTENER MIS ALERTAS
 // ============================================
 router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -736,7 +970,7 @@ router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 9. MARCAR ALERTA COMO LEÍDA
+// 11. MARCAR ALERTA COMO LEÍDA
 // ============================================
 router.post('/alertas/:alertaId/leer', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -759,7 +993,29 @@ router.post('/alertas/:alertaId/leer', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 10. ESTADÍSTICAS
+// 12. CONTAR MENSAJES NO LEÍDOS
+// ============================================
+router.get('/mensajes/no-leidos', authMiddleware, async (req, res) => {
+  const pool = req.app.get('db');
+  const { id: userId } = req.user;
+  
+  try {
+    const [result] = await pool.query(`
+      SELECT COUNT(*) as count
+      FROM scoring_mensajes
+      WHERE destinatario_id = ? AND leido = FALSE
+    `, [userId]);
+    
+    res.json({ count: result[0]?.count || 0 });
+    
+  } catch (error) {
+    console.error('Error al contar mensajes:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 13. ESTADÍSTICAS
 // ============================================
 router.get('/stats/dashboard', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
