@@ -1,35 +1,28 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING (CORREGIDO v2)
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING CON CLOUDINARY
  * ============================================
  * Endpoints para gestión de ventas y scoring
- * 
- * CAMBIOS:
- * - Agregado endpoint GET /archivo/:filename para servir PDFs
- * - Validación de duplicados: no permite mismo lead o teléfono dos veces
- * - URL de PDF corregida para usar el nuevo endpoint
+ * Archivos almacenados en Cloudinary (persistentes)
  */
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const cloudinary = require('cloudinary').v2;
 
-// Configuración de multer para subir PDFs
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = '/tmp/scoring';
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'venta-' + uniqueSuffix + path.extname(file.originalname));
-  }
+// =============================================
+// CONFIGURACIÓN DE CLOUDINARY
+// =============================================
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'daxkzdokg',
+  api_key: process.env.CLOUDINARY_API_KEY || '333635244693392',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '4lT-cx9Uy4sA0x9Vo-Eic1dYzGM'
 });
+
+// Configuración de multer para memoria (no guarda en disco)
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
   storage,
@@ -42,6 +35,32 @@ const upload = multer({
     }
   }
 });
+
+// Helper para subir a Cloudinary
+async function uploadToCloudinary(fileBuffer, fileName, mimeType) {
+  return new Promise((resolve, reject) => {
+    const resourceType = mimeType === 'application/pdf' ? 'raw' : 'image';
+    
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'scoring',
+        public_id: fileName,
+        resource_type: resourceType
+      },
+      (error, result) => {
+        if (error) {
+          console.error('Error subiendo a Cloudinary:', error);
+          reject(error);
+        } else {
+          console.log('✅ Archivo subido a Cloudinary:', result.secure_url);
+          resolve(result);
+        }
+      }
+    );
+    
+    uploadStream.end(fileBuffer);
+  });
+}
 
 // =============================================
 // Importar middleware de autenticación
@@ -101,41 +120,6 @@ async function crearNota(pool, ventaId, userId, tipo, estadoAnterior, estadoNuev
 }
 
 // ============================================
-// ENDPOINT PARA SERVIR ARCHIVOS PDF/IMÁGENES
-// ============================================
-router.get('/archivo/:filename', authMiddleware, (req, res) => {
-  const { filename } = req.params;
-  
-  // Validar que el filename no contenga path traversal
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-    return res.status(400).json({ error: 'Nombre de archivo inválido' });
-  }
-  
-  const filePath = path.join('/tmp/scoring', filename);
-  
-  // Verificar que el archivo existe
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Archivo no encontrado' });
-  }
-  
-  // Determinar el content-type
-  const ext = path.extname(filename).toLowerCase();
-  let contentType = 'application/octet-stream';
-  if (ext === '.pdf') contentType = 'application/pdf';
-  else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-  else if (ext === '.png') contentType = 'image/png';
-  else if (ext === '.gif') contentType = 'image/gif';
-  else if (ext === '.webp') contentType = 'image/webp';
-  
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-  
-  // Enviar el archivo
-  const fileStream = fs.createReadStream(filePath);
-  fileStream.pipe(res);
-});
-
-// ============================================
 // 1. CREAR VENTA (Vendedor)
 // ============================================
 router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
@@ -181,10 +165,6 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     `, [lead_id]);
     
     if (ventaExistenteLead.length > 0) {
-      // Si hay archivo subido, eliminarlo
-      if (req.file) {
-        fs.unlink(req.file.path, () => {});
-      }
       return res.status(400).json({ 
         error: 'Este lead ya tiene una venta en proceso',
         detalle: `Ya existe una venta para este lead en estado: ${ventaExistenteLead[0].estado}`
@@ -193,7 +173,6 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     
     // 2. Verificar si ya existe una venta con el mismo teléfono (que no esté rechazada)
     if (lead.phone) {
-      // Normalizar teléfono (quitar espacios, guiones, etc.)
       const telefonoNormalizado = lead.phone.replace(/[\s\-\(\)\.]/g, '');
       
       const [ventaExistenteTelefono] = await pool.query(`
@@ -207,10 +186,6 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       `, [telefonoNormalizado, lead_id]);
       
       if (ventaExistenteTelefono.length > 0) {
-        // Si hay archivo subido, eliminarlo
-        if (req.file) {
-          fs.unlink(req.file.path, () => {});
-        }
         return res.status(400).json({ 
           error: 'Ya existe una venta con este número de teléfono',
           detalle: `El teléfono ${lead.phone} ya está asociado a otra venta (Lead: ${ventaExistenteTelefono[0].lead_nombre}, Estado: ${ventaExistenteTelefono[0].estado})`
@@ -219,11 +194,28 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     }
     
     // =============================================
-    // FIN VALIDACIÓN DE DUPLICADOS
+    // SUBIR ARCHIVO A CLOUDINARY
     // =============================================
+    let pdfUrl = null;
     
-    // URL corregida: usar el endpoint /api/scoring/archivo/
-    const pdfUrl = req.file ? `/api/scoring/archivo/${req.file.filename}` : null;
+    if (req.file) {
+      try {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const fileName = 'venta-' + uniqueSuffix;
+        
+        const cloudinaryResult = await uploadToCloudinary(
+          req.file.buffer,
+          fileName,
+          req.file.mimetype
+        );
+        
+        pdfUrl = cloudinaryResult.secure_url;
+        console.log('📁 PDF guardado en Cloudinary:', pdfUrl);
+      } catch (uploadError) {
+        console.error('Error subiendo archivo a Cloudinary:', uploadError);
+        return res.status(500).json({ error: 'Error al subir el archivo' });
+      }
+    }
     
     // Crear la venta
     const [result] = await pool.query(`
@@ -745,7 +737,7 @@ router.post('/:id/notas', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 9. SUBIR DOCUMENTO ADICIONAL
+// 9. SUBIR DOCUMENTO ADICIONAL (CON CLOUDINARY)
 // ============================================
 router.post('/:id/documentos', authMiddleware, upload.single('documento'), async (req, res) => {
   const pool = req.app.get('db');
@@ -764,8 +756,17 @@ router.post('/:id/documentos', authMiddleware, upload.single('documento'), async
       return res.status(404).json({ error: 'Venta no encontrada' });
     }
     
-    // URL corregida
-    const documentoUrl = `/api/scoring/archivo/${req.file.filename}`;
+    // Subir a Cloudinary
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const fileName = 'doc-' + uniqueSuffix;
+    
+    const cloudinaryResult = await uploadToCloudinary(
+      req.file.buffer,
+      fileName,
+      req.file.mimetype
+    );
+    
+    const documentoUrl = cloudinaryResult.secure_url;
     
     await pool.query(`
       INSERT INTO scoring_documentos (venta_id, user_id, tipo, url, nombre_original)
