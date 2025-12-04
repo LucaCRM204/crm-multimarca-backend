@@ -5,6 +5,8 @@
  * Adaptado para tu schema con:
  * - assigned_to (no vendedor)
  * - MySQL con mysql2/promise
+ * 
+ * NOTA: Reasignación automática DESHABILITADA
  */
 
 const { Server } = require('socket.io');
@@ -95,9 +97,6 @@ function initSocketServer(httpServer, pool) {
     socket.on('lead:accepted', async ({ leadId, odUserId }) => {
       console.log(`✅ Lead ${leadId} aceptado por usuario ${odUserId}`);
       
-      // Cancelar el timer de reasignación si existe
-      cancelReassignmentTimer(leadId);
-      
       // Actualizar en la BD
       try {
         await pool.execute(`
@@ -149,8 +148,8 @@ function initSocketServer(httpServer, pool) {
     });
   });
 
-  // Iniciar el sistema de reasignación automática
-  startReassignmentChecker(io, pool);
+  // NOTA: Reasignación automática DESHABILITADA
+  // startReassignmentChecker(io, pool);
 
   return io;
 }
@@ -323,174 +322,6 @@ async function logSessionEnd(pool, userId, connectedAt) {
     `, [durationMinutes, userId]);
   } catch (err) {
     console.error('Error logging session end:', err);
-  }
-}
-
-// ============================================
-// SISTEMA DE REASIGNACIÓN AUTOMÁTICA
-// ============================================
-
-const pendingReassignments = new Map(); // Map<leadId, timeoutId>
-const REASSIGNMENT_TIMEOUT_MINUTES = parseInt(process.env.LEAD_TIMEOUT_MINUTES) || 10;
-
-function startReassignmentChecker(io, pool) {
-  console.log(`⏰ Checker de reasignación iniciado (timeout: ${REASSIGNMENT_TIMEOUT_MINUTES} min)`);
-  
-  // Verificar cada minuto si hay leads sin atender
-  setInterval(async () => {
-    if (!pool) return;
-    
-    try {
-      // Buscar leads asignados hace más de X minutos que no han sido aceptados
-      const [unattendedLeads] = await pool.execute(`
-        SELECT l.*, u.name as vendedor_nombre
-        FROM leads l
-        LEFT JOIN users u ON l.assigned_to = u.id
-        WHERE l.assigned_to IS NOT NULL
-          AND l.estado = 'nuevo'
-          AND l.accepted_at IS NULL
-          AND l.assigned_at IS NOT NULL
-          AND l.assigned_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
-          AND l.id NOT IN (
-            SELECT lead_id FROM lead_reassignment_log 
-            WHERE created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
-          )
-      `, [REASSIGNMENT_TIMEOUT_MINUTES]);
-
-      for (const lead of unattendedLeads) {
-        await reassignLead(io, pool, lead);
-      }
-    } catch (err) {
-      console.error('Error en checker de reasignación:', err);
-    }
-  }, 60000); // Cada minuto
-}
-
-async function reassignLead(io, pool, lead) {
-  try {
-    console.log(`⏰ Reasignando lead ${lead.id} (${lead.nombre}) - No atendido en ${REASSIGNMENT_TIMEOUT_MINUTES} min`);
-    
-    // Buscar siguiente vendedor disponible
-    const nextVendedor = await getNextAvailableVendedor(pool, lead.assigned_to);
-    
-    if (!nextVendedor) {
-      console.log('No hay vendedores disponibles para reasignar');
-      
-      // Notificar al owner/gerentes
-      io.emit('alert:system', {
-        type: 'warning',
-        title: '⚠️ Lead sin atender',
-        message: `El lead ${lead.nombre} lleva más de ${REASSIGNMENT_TIMEOUT_MINUTES} min sin ser atendido y no hay vendedores disponibles`,
-        leadId: lead.id,
-        severity: 'high',
-        timestamp: new Date().toISOString()
-      });
-      return;
-    }
-
-    const previousVendedor = lead.assigned_to;
-
-    // Actualizar el lead en la BD
-    await pool.execute(`
-      UPDATE leads 
-      SET assigned_to = ?,
-          assigned_at = NOW(),
-          accepted_at = NULL,
-          reassignment_count = COALESCE(reassignment_count, 0) + 1
-      WHERE id = ?
-    `, [nextVendedor.id, lead.id]);
-
-    // Registrar la reasignación
-    await pool.execute(`
-      INSERT INTO lead_reassignment_log (lead_id, from_user_id, to_user_id, reason)
-      VALUES (?, ?, ?, 'timeout_10_min')
-    `, [lead.id, previousVendedor, nextVendedor.id]);
-
-    // Notificar al vendedor anterior
-    emitToUser(io, previousVendedor, 'notification', {
-      type: 'lead_reassigned_away',
-      title: '⏰ Lead Reasignado',
-      message: `El lead ${lead.nombre} fue reasignado a ${nextVendedor.name} por no responder en ${REASSIGNMENT_TIMEOUT_MINUTES} minutos`,
-      leadId: lead.id,
-      severity: 'warning',
-      timestamp: new Date().toISOString()
-    });
-
-    // Notificar al nuevo vendedor
-    emitToUser(io, nextVendedor.id, 'notification', {
-      type: 'lead_assigned',
-      title: '🎯 Nuevo Lead Reasignado',
-      message: `Se te reasignó el lead: ${lead.nombre} (el vendedor anterior no respondió)`,
-      leadId: lead.id,
-      severity: 'high',
-      timestamp: new Date().toISOString()
-    });
-
-    // Notificar a todos del cambio
-    io.emit('lead:reassigned', {
-      leadId: lead.id,
-      previousVendedor: previousVendedor,
-      newVendedor: nextVendedor.id,
-      newVendedorName: nextVendedor.name,
-      reason: 'timeout',
-      timestamp: new Date().toISOString()
-    });
-
-    // Obtener el lead actualizado
-    const [[updatedLead]] = await pool.execute('SELECT * FROM leads WHERE id = ?', [lead.id]);
-    io.emit('lead:changed', updatedLead);
-
-    console.log(`✅ Lead ${lead.id} reasignado de ${previousVendedor} a ${nextVendedor.id}`);
-
-  } catch (err) {
-    console.error('Error reasignando lead:', err);
-  }
-}
-
-async function getNextAvailableVendedor(pool, excludeUserId) {
-  // Buscar vendedor con menos leads activos que esté online
-  const onlineUserIds = Array.from(userSessions.keys());
-  
-  if (onlineUserIds.length > 0) {
-    // Preferir vendedores que están online
-    const placeholders = onlineUserIds.map(() => '?').join(',');
-    const [vendors] = await pool.execute(`
-      SELECT u.id, u.name, COUNT(l.id) as lead_count
-      FROM users u
-      LEFT JOIN leads l ON l.assigned_to = u.id AND l.estado NOT IN ('vendido', 'perdido')
-      WHERE u.role = 'vendedor' 
-        AND u.active = 1
-        AND u.id != ?
-        AND u.id IN (${placeholders})
-      GROUP BY u.id
-      ORDER BY lead_count ASC
-      LIMIT 1
-    `, [excludeUserId, ...onlineUserIds]);
-
-    if (vendors.length > 0) return vendors[0];
-  }
-
-  // Si no hay nadie online, buscar cualquier vendedor activo
-  const [vendors] = await pool.execute(`
-    SELECT u.id, u.name, COUNT(l.id) as lead_count
-    FROM users u
-    LEFT JOIN leads l ON l.assigned_to = u.id AND l.estado NOT IN ('vendido', 'perdido')
-    WHERE u.role = 'vendedor' 
-      AND u.active = 1
-      AND u.id != ?
-    GROUP BY u.id
-    ORDER BY lead_count ASC
-    LIMIT 1
-  `, [excludeUserId]);
-
-  return vendors.length > 0 ? vendors[0] : null;
-}
-
-function cancelReassignmentTimer(leadId) {
-  if (pendingReassignments.has(leadId)) {
-    clearTimeout(pendingReassignments.get(leadId));
-    pendingReassignments.delete(leadId);
-    console.log(`⏹️ Timer de reasignación cancelado para lead ${leadId}`);
   }
 }
 

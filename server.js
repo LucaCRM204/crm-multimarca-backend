@@ -91,6 +91,5 @@ server.listen(PORT, () => {
   console.log(`\n🚀 Backend escuchando en puerto ${PORT}`);
   console.log(`⚡ WebSockets habilitados`);
   console.log(`📊 Reportes de actividad disponibles`);
-  console.log(`📋 Módulo de Scoring activo`);
-  console.log(`🔄 Reasignación automática activa (${process.env.LEAD_TIMEOUT_MINUTES || 10} min)\n`);
+  console.log(`📋 Módulo de Scoring activo\n`);
 });
