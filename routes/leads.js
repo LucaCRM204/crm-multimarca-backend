@@ -1,7 +1,48 @@
+/**
+ * ============================================
+ * ROUTES/LEADS.JS - CON ESTADOS PROTEGIDOS
+ * ============================================
+ * CAMBIOS:
+ * - Estados protegidos: rechazado_supervisor, rechazado_scoring
+ * - Nadie puede cambiar manualmente A estos estados
+ * - Nadie puede cambiar DESDE estos estados (excepto owner)
+ * - Nuevo endpoint /reactivar solo para owner
+ */
+
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
+
+// ============================================
+// ESTADOS PROTEGIDOS
+// ============================================
+const ESTADOS_PROTEGIDOS = ['rechazado_supervisor', 'rechazado_scoring'];
+
+/**
+ * Valida si un cambio de estado de lead es permitido
+ */
+function validarCambioEstadoLead(estadoActual, nuevoEstado, role, esAutomatico = false) {
+  // Si el estado actual es protegido, solo owner puede cambiarlo
+  if (ESTADOS_PROTEGIDOS.includes(estadoActual)) {
+    if (role !== 'owner') {
+      return {
+        permitido: false,
+        error: `El estado "${estadoActual}" es final y solo puede ser modificado por el Owner del sistema.`
+      };
+    }
+  }
+  
+  // Nadie puede cambiar manualmente A un estado protegido
+  if (ESTADOS_PROTEGIDOS.includes(nuevoEstado) && !esAutomatico) {
+    return {
+      permitido: false,
+      error: `No se puede cambiar manualmente a "${nuevoEstado}". Este estado solo se asigna automáticamente cuando se rechaza en scoring.`
+    };
+  }
+  
+  return { permitido: true };
+}
 
 // Utilidad para mapear assigned_to -> vendedor
 const mapLead = (row) => ({
@@ -9,7 +50,7 @@ const mapLead = (row) => ({
   vendedor: row.assigned_to ?? null,
 });
 
-// 🔍 HELPER: Validar si el usuario puede asignar a un vendedor específico
+// 🔐 HELPER: Validar si el usuario puede asignar a un vendedor específico
 const canAssignToVendor = async (userId, userRole, targetVendorId) => {
   // Owner y Director pueden asignar a cualquiera
   if (['owner', 'dueño', 'director'].includes(userRole)) {
@@ -199,7 +240,7 @@ router.post('/', authenticateToken, async (req, res) => {
       fuente = 'otro',
       notas = '',
       vendedor = null,
-      assigned_to = null  // ✅ NUEVO: Aceptar assigned_to también
+      assigned_to = null
     } = req.body;
 
     // 🔴 VALIDAR CAMPOS REQUERIDOS
@@ -218,17 +259,22 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
     }
 
-    // 🔍 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
-    // ✅ CAMBIO CRÍTICO: Priorizar assigned_to si viene del request (bots de WhatsApp)
+    // ============================================
+    // VALIDAR ESTADO PROTEGIDO EN CREACIÓN
+    // ============================================
+    if (ESTADOS_PROTEGIDOS.includes(estado)) {
+      return res.status(400).json({ 
+        error: `No se puede crear un lead con estado "${estado}". Este estado solo se asigna automáticamente.`
+      });
+    }
+
+    // 🔐 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
     let finalAssignedTo = assigned_to || vendedor;
 
     if (finalAssignedTo) {
-      // ✅ Si viene assigned_to o vendedor, RESPETARLO (para bots)
-      // Solo validar permisos si NO viene de una fuente automática
       const isFromBot = fuente && (fuente.includes('whatsapp') || fuente.includes('bot'));
       
       if (!isFromBot) {
-        // Validar permisos solo si NO es de un bot
         const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
         
         if (!hasPermission) {
@@ -242,21 +288,16 @@ router.post('/', authenticateToken, async (req, res) => {
       console.log(`✅ Lead asignado a vendedor ${finalAssignedTo} ${isFromBot ? '(BOT)' : '(manual validado)'}`);
       
     } else {
-      // Asignación automática según el rol (SOLO si no viene assigned_to)
       if (req.user.role === 'vendedor') {
-        // Los vendedores se auto-asignan
         finalAssignedTo = req.user.id;
         console.log(`🎯 Lead auto-asignado al vendedor ${finalAssignedTo} (creador)`);
         
       } else if (['supervisor', 'gerente'].includes(req.user.role)) {
-        // Supervisores y Gerentes: asignar por round-robin dentro de su equipo
         try {
           finalAssignedTo = await getAssignedVendorByBrand(marca);
           
-          // Validar que el vendedor asignado pertenece a su equipo
           const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
           if (!hasPermission) {
-            // Si el round-robin asignó a alguien fuera del equipo, asignar al creador
             finalAssignedTo = req.user.id;
             console.log(`⚠️ Round-robin asignó fuera del equipo, reasignando al creador ${finalAssignedTo}`);
           } else {
@@ -264,12 +305,10 @@ router.post('/', authenticateToken, async (req, res) => {
           }
         } catch (assignError) {
           console.error('❌ Error en asignación automática:', assignError);
-          // Fallback: asignar al creador
           finalAssignedTo = req.user.id;
         }
         
       } else {
-        // Owner y Director: usar round-robin normal (SOLO si no viene assigned_to)
         try {
           finalAssignedTo = await getAssignedVendorByBrand(marca);
           console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${finalAssignedTo}`);
@@ -283,8 +322,7 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
 
-    // 🔴 LOGS DETALLADOS PARA DEBUG
-    console.log('🔍 Creando lead con datos:', {
+    console.log('📝 Creando lead con datos:', {
       nombre, telefono, modelo, marca, formaPago, estado, 
       fuente, assigned_to: finalAssignedTo, created_by: req.user.id, 
       creator_role: req.user.role,
@@ -316,18 +354,53 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// PUT actualizar lead (incluye reasignación)
+// PUT actualizar lead (incluye reasignación) - CON VALIDACIÓN DE ESTADOS PROTEGIDOS
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
+
+    // ============================================
+    // OBTENER LEAD ACTUAL PARA VALIDAR ESTADO
+    // ============================================
+    const [currentLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    
+    if (currentLead.length === 0) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+    
+    const leadActual = currentLead[0];
+
+    // ============================================
+    // VALIDAR CAMBIO DE ESTADO PROTEGIDO
+    // ============================================
+    if (updates.estado && updates.estado !== leadActual.estado) {
+      const validacion = validarCambioEstadoLead(
+        leadActual.estado, 
+        updates.estado, 
+        req.user.role,
+        false // No es automático, es cambio manual
+      );
+      
+      if (!validacion.permitido) {
+        return res.status(403).json({ error: validacion.error });
+      }
+    }
+
+    // Si el lead está en estado protegido y se intenta cambiar cualquier cosa (no solo estado)
+    // Solo el owner puede modificarlo
+    if (ESTADOS_PROTEGIDOS.includes(leadActual.estado) && req.user.role !== 'owner') {
+      return res.status(403).json({ 
+        error: `Este lead está en estado "${leadActual.estado}" y no puede ser modificado. Solo el Owner puede cambiarlo.`
+      });
+    }
 
     const allowedFields = [
       'nombre', 'telefono', 'modelo', 'marca', 'formaPago', 'estado',
       'fuente', 'notas', 'assigned_to', 'vendedor', 'infoUsado', 'entrega', 'fecha'
     ];
 
-    // 🔥 NUEVO: Si se está asignando marca y NO viene vendedor, asignar automáticamente
+    // 🔥 Si se está asignando marca y NO viene vendedor, asignar automáticamente
     if (updates.marca && !updates.vendedor && !updates.assigned_to) {
       try {
         const autoVendor = await getAssignedVendorByBrand(updates.marca);
@@ -337,7 +410,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
         }
       } catch (error) {
         console.error('⚠️ Error en auto-asignación:', error);
-        // Continuar sin asignar vendedor
       }
     }
 
@@ -394,9 +466,93 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ============================================
+// 🔓 REACTIVAR LEAD (Solo Owner)
+// ============================================
+router.post('/:id/reactivar', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.user;
+  const { nuevo_estado, motivo } = req.body;
+  
+  // Solo owner puede reactivar
+  if (role !== 'owner') {
+    return res.status(403).json({ 
+      error: 'Solo el Owner puede reactivar leads rechazados' 
+    });
+  }
+  
+  try {
+    const [leads] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    
+    if (leads.length === 0) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+    
+    const lead = leads[0];
+    
+    // Verificar que está en estado protegido
+    if (!ESTADOS_PROTEGIDOS.includes(lead.estado)) {
+      return res.status(400).json({ 
+        error: 'Este lead no está en estado rechazado' 
+      });
+    }
+    
+    if (!nuevo_estado) {
+      return res.status(400).json({ 
+        error: 'Debe especificar el nuevo estado para el lead' 
+      });
+    }
+    
+    // No permitir reactivar a otro estado protegido
+    if (ESTADOS_PROTEGIDOS.includes(nuevo_estado)) {
+      return res.status(400).json({ 
+        error: 'No se puede reactivar a un estado de rechazo' 
+      });
+    }
+    
+    const timestamp = new Date().toISOString();
+    const notaReactivacion = `\n[${timestamp}] REACTIVADO por Owner desde "${lead.estado}": ${motivo || 'Sin motivo especificado'}`;
+    
+    await pool.execute(`
+      UPDATE leads 
+      SET estado = ?,
+          notas = CONCAT(IFNULL(notas, ''), ?),
+          updated_at = NOW()
+      WHERE id = ?
+    `, [nuevo_estado, notaReactivacion, id]);
+    
+    const [leadActualizado] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    
+    console.log(`🔓 Lead ${id} reactivado por Owner: ${lead.estado} → ${nuevo_estado}`);
+    
+    res.json({ 
+      ok: true, 
+      mensaje: `Lead reactivado correctamente a estado "${nuevo_estado}"`,
+      lead: mapLead(leadActualizado[0])
+    });
+    
+  } catch (error) {
+    console.error('Error al reactivar lead:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // DELETE eliminar lead
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
+    // ============================================
+    // VALIDAR QUE NO SEA ESTADO PROTEGIDO (excepto owner)
+    // ============================================
+    const [currentLead] = await pool.execute('SELECT estado FROM leads WHERE id = ?', [req.params.id]);
+    
+    if (currentLead.length > 0 && ESTADOS_PROTEGIDOS.includes(currentLead[0].estado)) {
+      if (req.user.role !== 'owner') {
+        return res.status(403).json({ 
+          error: `No se puede eliminar un lead en estado "${currentLead[0].estado}". Solo el Owner puede hacerlo.`
+        });
+      }
+    }
+    
     await pool.execute('DELETE FROM leads WHERE id = ?', [req.params.id]);
     res.json({ ok: true, message: 'Lead eliminado' });
   } catch (error) {
