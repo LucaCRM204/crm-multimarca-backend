@@ -1,6 +1,6 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING (CORREGIDO)
  * ============================================
  * Endpoints para gestión de ventas y scoring
  */
@@ -38,8 +38,21 @@ const upload = multer({
   }
 });
 
-// Middleware de autenticación (asumiendo que ya lo tenés)
-const authMiddleware = require('../middleware/auth');
+// =============================================
+// FIX: Importar authMiddleware correctamente
+// =============================================
+const authModule = require('../middleware/auth');
+// Manejar ambos casos: exportado como función o como objeto con propiedad
+const authMiddleware = typeof authModule === 'function' 
+  ? authModule 
+  : (authModule.authMiddleware || authModule.default || authModule.auth);
+
+// Verificar que tenemos una función válida
+if (typeof authMiddleware !== 'function') {
+  console.error('ERROR: authMiddleware no es una función válida');
+  console.error('Tipo recibido:', typeof authModule);
+  console.error('Propiedades disponibles:', Object.keys(authModule));
+}
 
 // Estados posibles
 const ESTADOS = {
@@ -50,81 +63,43 @@ const ESTADOS = {
   OBSERVADA: 'observada',
   RECHAZADA: 'rechazada',
   PENDIENTE_PAGO: 'pendiente_pago',
-  SEÑA: 'seña',
+  SENA: 'seña',
   FINALIZADA: 'finalizada',
   CARGADA_CONCESIONARIO: 'cargada_concesionario'
 };
 
-// Roles que pueden ver scoring
-const ROLES_SCORING = ['owner', 'director', 'jefe_scoring', 'scoring'];
-const ROLES_COBRANZA = ['owner', 'director', 'jefe_scoring', 'cobranza'];
+// Transiciones permitidas según el estado actual
+const TRANSICIONES_PERMITIDAS = {
+  [ESTADOS.PENDIENTE_SUPERVISOR]: [ESTADOS.INGRESADA],
+  [ESTADOS.INGRESADA]: [ESTADOS.ASIGNADA],
+  [ESTADOS.ASIGNADA]: [ESTADOS.EN_PROCESO, ESTADOS.OBSERVADA, ESTADOS.RECHAZADA, ESTADOS.PENDIENTE_PAGO],
+  [ESTADOS.EN_PROCESO]: [ESTADOS.OBSERVADA, ESTADOS.RECHAZADA, ESTADOS.PENDIENTE_PAGO],
+  [ESTADOS.OBSERVADA]: [ESTADOS.EN_PROCESO, ESTADOS.RECHAZADA, ESTADOS.PENDIENTE_PAGO],
+  [ESTADOS.RECHAZADA]: [], // Estado final negativo
+  [ESTADOS.PENDIENTE_PAGO]: [ESTADOS.SENA, ESTADOS.FINALIZADA],
+  [ESTADOS.SENA]: [ESTADOS.FINALIZADA],
+  [ESTADOS.FINALIZADA]: [ESTADOS.CARGADA_CONCESIONARIO],
+  [ESTADOS.CARGADA_CONCESIONARIO]: [] // Estado final positivo
+};
+
+// Roles permitidos para cada acción
 const ROLES_VENTAS = ['owner', 'director', 'gerente', 'supervisor', 'vendedor'];
+const ROLES_AUTORIZACION = ['owner', 'director', 'gerente', 'supervisor'];
+const ROLES_SCORING = ['owner', 'jefe_scoring', 'scoring'];
+const ROLES_COBRANZA = ['owner', 'cobranza'];
+const ROLES_VER_TODO = ['owner', 'director'];
 
-// ============================================
-// HELPER: Obtener IDs de usuarios visibles según jerarquía
-// ============================================
-async function getVisibleUserIds(pool, user) {
-  if (['owner', 'director', 'jefe_scoring', 'cobranza'].includes(user.role)) {
-    // Ve todos
-    const [users] = await pool.execute('SELECT id FROM users');
-    return users.map(u => u.id);
-  }
-  
-  if (user.role === 'scoring') {
-    // Scoring solo ve ventas en estados de scoring
-    return null; // Retornamos null para indicar que filtre por estado
-  }
-  
-  if (user.role === 'gerente') {
-    // Ve su equipo completo
-    const [descendants] = await pool.execute(`
-      WITH RECURSIVE subordinates AS (
-        SELECT id FROM users WHERE reportsTo = ?
-        UNION ALL
-        SELECT u.id FROM users u
-        INNER JOIN subordinates s ON u.reportsTo = s.id
-      )
-      SELECT id FROM subordinates
-    `, [user.id]);
-    return [user.id, ...descendants.map(u => u.id)];
-  }
-  
-  if (user.role === 'supervisor') {
-    // Ve sus vendedores directos
-    const [vendors] = await pool.execute('SELECT id FROM users WHERE reportsTo = ?', [user.id]);
-    return [user.id, ...vendors.map(u => u.id)];
-  }
-  
-  // Vendedor solo ve lo propio
-  return [user.id];
-}
-
-// ============================================
-// HELPER: Crear alerta de scoring
-// ============================================
-async function crearAlertaScoring(pool, io, ventaId, tipo, mensaje, userId = null) {
-  await pool.execute(`
+// Helper para crear alertas
+async function crearAlerta(pool, ventaId, userId, tipo, mensaje) {
+  await pool.query(`
     INSERT INTO scoring_alertas (venta_id, user_id, tipo, mensaje)
     VALUES (?, ?, ?, ?)
   `, [ventaId, userId, tipo, mensaje]);
-  
-  // Emitir por WebSocket
-  if (io) {
-    if (userId) {
-      // Alerta para usuario específico
-      io.to(`user_${userId}`).emit('scoring:alerta', { ventaId, tipo, mensaje });
-    } else {
-      // Alerta para todo el equipo de scoring
-      io.to('scoring_team').emit('scoring:alerta', { ventaId, tipo, mensaje });
-    }
-  }
 }
 
-// ============================================
-// HELPER: Crear nota en historial
-// ============================================
-async function crearNota(pool, ventaId, userId, tipo, mensaje, estadoAnterior = null, estadoNuevo = null, visiblePara = null) {
-  await pool.execute(`
+// Helper para crear nota en historial
+async function crearNota(pool, ventaId, userId, tipo, estadoAnterior, estadoNuevo, mensaje, visiblePara = null) {
+  await pool.query(`
     INSERT INTO scoring_notas (venta_id, user_id, tipo, estado_anterior, estado_nuevo, mensaje, visible_para)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `, [ventaId, userId, tipo, estadoAnterior, estadoNuevo, mensaje, visiblePara ? JSON.stringify(visiblePara) : null]);
@@ -150,46 +125,56 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       return res.status(400).json({ error: 'lead_id y fecha_venta son obligatorios' });
     }
     
-    // Verificar que el lead existe y pertenece al vendedor
-    const [leads] = await pool.execute(
-      'SELECT * FROM leads WHERE id = ? AND assigned_to = ?',
-      [lead_id, userId]
-    );
+    // Obtener info del lead para determinar supervisor
+    const [leadRows] = await pool.query(`
+      SELECT l.*, u.reportsTo as supervisor_id
+      FROM leads l
+      LEFT JOIN users u ON l.assigned_to = u.id
+      WHERE l.id = ?
+    `, [lead_id]);
     
-    if (leads.length === 0) {
-      return res.status(404).json({ error: 'Lead no encontrado o no te pertenece' });
+    if (leadRows.length === 0) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
     }
     
-    // Obtener supervisor del vendedor
-    const [userInfo] = await pool.execute('SELECT reportsTo FROM users WHERE id = ?', [userId]);
-    const supervisorId = userInfo[0]?.reportsTo || null;
+    const lead = leadRows[0];
+    const supervisorId = lead.supervisor_id || null;
     
     // Crear la venta
-    const [result] = await pool.execute(`
+    const [result] = await pool.query(`
       INSERT INTO ventas_scoring 
-      (lead_id, vendedor_id, supervisor_id, fecha_venta, pdf_url, notas_vendedor, estado)
-      VALUES (?, ?, ?, ?, ?, ?, 'pendiente_supervisor')
-    `, [lead_id, userId, supervisorId, fecha_venta, pdfUrl, notas_vendedor]);
+      (lead_id, vendedor_id, supervisor_id, estado, fecha_venta, pdf_url, notas_vendedor)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [lead_id, userId, supervisorId, ESTADOS.PENDIENTE_SUPERVISOR, fecha_venta, pdfUrl, notas_vendedor || null]);
     
     const ventaId = result.insertId;
     
-    // Crear nota en historial
-    await crearNota(pool, ventaId, userId, 'sistema', 'Venta creada por vendedor');
+    // Crear nota de creación
+    await crearNota(pool, ventaId, userId, 'creacion', null, ESTADOS.PENDIENTE_SUPERVISOR, 'Venta creada por vendedor');
     
-    // Alerta al supervisor
+    // Crear alerta para supervisor
     if (supervisorId) {
-      await crearAlertaScoring(pool, io, ventaId, 'nueva_venta', 
-        `Nueva venta pendiente de autorización - Lead: ${leads[0].nombre}`, supervisorId);
+      await crearAlerta(pool, ventaId, supervisorId, 'nueva_venta', `Nueva venta pendiente de autorización: ${lead.nombre}`);
+      
+      // Emitir evento WebSocket
+      if (io) {
+        io.to(`user_${supervisorId}`).emit('scoring:alerta', {
+          tipo: 'nueva_venta',
+          ventaId,
+          mensaje: `Nueva venta pendiente de autorización: ${lead.nombre}`
+        });
+      }
     }
     
-    // Obtener la venta creada con datos completos
-    const [ventas] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [ventaId]);
-    
-    res.status(201).json(ventas[0]);
+    res.status(201).json({ 
+      ok: true, 
+      ventaId,
+      mensaje: 'Venta creada correctamente. Esperando autorización del supervisor.'
+    });
     
   } catch (error) {
-    console.error('Error creando venta:', error);
-    res.status(500).json({ error: 'Error al crear la venta' });
+    console.error('Error al crear venta:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -199,83 +184,98 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
 router.get('/', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const { id: userId, role } = req.user;
-  const { estado, vendedor_id, desde, hasta } = req.query;
+  const { estado, vendedor_id, fecha_desde, fecha_hasta } = req.query;
   
   try {
-    let query = 'SELECT * FROM v_scoring_dashboard WHERE 1=1';
+    let query = `SELECT * FROM v_scoring_dashboard WHERE 1=1`;
     const params = [];
     
     // Filtrar según rol
-    if (role === 'vendedor') {
-      query += ' AND vendedor_id = ?';
-      params.push(userId);
-    } else if (role === 'supervisor') {
-      const [vendors] = await pool.execute('SELECT id FROM users WHERE reportsTo = ?', [userId]);
-      const vendorIds = [userId, ...vendors.map(v => v.id)];
-      query += ` AND vendedor_id IN (${vendorIds.map(() => '?').join(',')})`;
-      params.push(...vendorIds);
-    } else if (role === 'gerente') {
-      const visibleIds = await getVisibleUserIds(pool, req.user);
-      query += ` AND vendedor_id IN (${visibleIds.map(() => '?').join(',')})`;
-      params.push(...visibleIds);
+    if (ROLES_VER_TODO.includes(role)) {
+      // Owner y Director ven todo
+    } else if (role === 'jefe_scoring') {
+      // Jefe de scoring ve todas las ventas desde "ingresada"
+      query += ` AND estado != 'pendiente_supervisor'`;
     } else if (role === 'scoring') {
-      // Scoring solo ve estados que le corresponden
-      query += ` AND estado IN ('ingresada', 'asignada', 'en_proceso')`;
+      // Scoring ve ventas asignadas a él o disponibles
+      query += ` AND (scoring_user_id = ? OR (estado = 'ingresada' AND scoring_user_id IS NULL))`;
+      params.push(userId);
     } else if (role === 'cobranza') {
-      // Cobranza solo ve pendiente_pago, seña, finalizada
-      query += ` AND estado IN ('pendiente_pago', 'seña', 'finalizada')`;
+      // Cobranza ve ventas en pendiente_pago, seña, finalizada
+      query += ` AND estado IN ('pendiente_pago', 'seña', 'finalizada', 'cargada_concesionario')`;
+    } else if (ROLES_AUTORIZACION.includes(role)) {
+      // Supervisor/Gerente ven ventas de su equipo
+      query += ` AND (vendedor_id = ? OR supervisor_id = ?)`;
+      params.push(userId, userId);
+    } else if (role === 'vendedor') {
+      // Vendedor solo ve sus propias ventas
+      query += ` AND vendedor_id = ?`;
+      params.push(userId);
     }
-    // owner, director, jefe_scoring ven todo
     
-    // Filtros adicionales
+    // Filtros opcionales
     if (estado) {
-      query += ' AND estado = ?';
+      query += ` AND estado = ?`;
       params.push(estado);
     }
-    
     if (vendedor_id) {
-      query += ' AND vendedor_id = ?';
+      query += ` AND vendedor_id = ?`;
       params.push(vendedor_id);
     }
-    
-    if (desde) {
-      query += ' AND fecha_venta >= ?';
-      params.push(desde);
+    if (fecha_desde) {
+      query += ` AND fecha_venta >= ?`;
+      params.push(fecha_desde);
+    }
+    if (fecha_hasta) {
+      query += ` AND fecha_venta <= ?`;
+      params.push(fecha_hasta);
     }
     
-    if (hasta) {
-      query += ' AND fecha_venta <= ?';
-      params.push(hasta);
-    }
+    query += ` ORDER BY created_at DESC`;
     
-    query += ' ORDER BY created_at DESC';
+    const [ventas] = await pool.query(query, params);
     
-    const [ventas] = await pool.execute(query, params);
-    
-    res.json(ventas);
+    res.json({ ok: true, ventas });
     
   } catch (error) {
-    console.error('Error listando ventas:', error);
-    res.status(500).json({ error: 'Error al obtener ventas' });
+    console.error('Error al listar ventas:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 // ============================================
-// 3. OBTENER VENTA POR ID
+// 3. OBTENER VENTA POR ID (con historial)
 // ============================================
 router.get('/:id', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const { id } = req.params;
+  const { id: userId, role } = req.user;
   
   try {
-    const [ventas] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [id]);
+    // Obtener venta
+    const [ventas] = await pool.query(`SELECT * FROM v_scoring_dashboard WHERE id = ?`, [id]);
     
     if (ventas.length === 0) {
       return res.status(404).json({ error: 'Venta no encontrada' });
     }
     
+    const venta = ventas[0];
+    
+    // Verificar permisos de acceso
+    const tieneAcceso = 
+      ROLES_VER_TODO.includes(role) ||
+      venta.vendedor_id === userId ||
+      venta.supervisor_id === userId ||
+      venta.scoring_user_id === userId ||
+      venta.cobranza_user_id === userId ||
+      ['jefe_scoring', 'scoring', 'cobranza'].includes(role);
+    
+    if (!tieneAcceso) {
+      return res.status(403).json({ error: 'No tenés acceso a esta venta' });
+    }
+    
     // Obtener historial de notas
-    const [notas] = await pool.execute(`
+    const [notas] = await pool.query(`
       SELECT sn.*, u.name as usuario_nombre
       FROM scoring_notas sn
       LEFT JOIN users u ON sn.user_id = u.id
@@ -283,11 +283,11 @@ router.get('/:id', authMiddleware, async (req, res) => {
       ORDER BY sn.created_at DESC
     `, [id]);
     
-    res.json({ ...ventas[0], notas });
+    res.json({ ok: true, venta, notas });
     
   } catch (error) {
-    console.error('Error obteniendo venta:', error);
-    res.status(500).json({ error: 'Error al obtener la venta' });
+    console.error('Error al obtener venta:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -301,59 +301,53 @@ router.post('/:id/autorizar', authMiddleware, async (req, res) => {
   const { id: userId, role } = req.user;
   const { pv, medio_pago } = req.body;
   
-  if (!['owner', 'director', 'gerente', 'supervisor'].includes(role)) {
+  if (!ROLES_AUTORIZACION.includes(role)) {
     return res.status(403).json({ error: 'No tenés permiso para autorizar ventas' });
   }
   
-  if (!pv || !medio_pago) {
-    return res.status(400).json({ error: 'PV y medio de pago son obligatorios' });
-  }
-  
   try {
-    // Verificar que la venta existe y está en estado correcto
-    const [ventas] = await pool.execute(
-      'SELECT * FROM ventas_scoring WHERE id = ? AND estado = ?',
-      [id, ESTADOS.PENDIENTE_SUPERVISOR]
-    );
+    // Verificar estado actual
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
     
     if (ventas.length === 0) {
-      return res.status(404).json({ error: 'Venta no encontrada o ya fue procesada' });
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    
+    if (venta.estado !== ESTADOS.PENDIENTE_SUPERVISOR) {
+      return res.status(400).json({ error: 'Esta venta ya fue procesada' });
+    }
+    
+    // Verificar que sea supervisor del vendedor
+    if (role !== 'owner' && role !== 'director' && venta.supervisor_id !== userId) {
+      return res.status(403).json({ error: 'Solo podés autorizar ventas de tu equipo' });
+    }
+    
+    if (!pv || !medio_pago) {
+      return res.status(400).json({ error: 'PV y medio de pago son obligatorios' });
     }
     
     // Actualizar venta
-    await pool.execute(`
+    await pool.query(`
       UPDATE ventas_scoring 
-      SET estado = 'ingresada',
-          pv = ?,
-          medio_pago = ?,
-          autorizado_por = ?,
-          autorizado_at = NOW()
+      SET estado = ?, pv = ?, medio_pago = ?, autorizado_por = ?, autorizado_at = NOW()
       WHERE id = ?
-    `, [pv, medio_pago, userId, id]);
+    `, [ESTADOS.INGRESADA, pv, medio_pago, userId, id]);
     
-    // Registrar en historial
-    await crearNota(pool, id, userId, 'cambio_estado', 
-      `Venta autorizada. PV: ${pv}, Medio de pago: ${medio_pago}`,
-      ESTADOS.PENDIENTE_SUPERVISOR, ESTADOS.INGRESADA);
+    // Crear nota
+    await crearNota(pool, id, userId, 'cambio_estado', ESTADOS.PENDIENTE_SUPERVISOR, ESTADOS.INGRESADA, 'Venta autorizada por supervisor');
     
-    // Alerta a equipo de scoring
-    const [leadInfo] = await pool.execute(`
-      SELECT l.nombre FROM ventas_scoring vs
-      JOIN leads l ON vs.lead_id = l.id
-      WHERE vs.id = ?
-    `, [id]);
+    // Notificar al equipo de scoring
+    if (io) {
+      io.emit('scoring:nueva_venta_disponible', { ventaId: id });
+    }
     
-    await crearAlertaScoring(pool, io, id, 'nueva_venta',
-      `Nueva venta autorizada - Cliente: ${leadInfo[0]?.nombre || 'N/A'}`);
-    
-    // Obtener venta actualizada
-    const [updated] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [id]);
-    
-    res.json(updated[0]);
+    res.json({ ok: true, mensaje: 'Venta autorizada correctamente' });
     
   } catch (error) {
-    console.error('Error autorizando venta:', error);
-    res.status(500).json({ error: 'Error al autorizar la venta' });
+    console.error('Error al autorizar venta:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -364,175 +358,163 @@ router.post('/:id/tomar', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const io = req.app.get('io');
   const { id } = req.params;
-  const { id: userId, role, name } = req.user;
+  const { id: userId, role } = req.user;
   
   if (!ROLES_SCORING.includes(role)) {
     return res.status(403).json({ error: 'No tenés permiso para tomar ventas' });
   }
   
   try {
-    // Verificar que está en estado 'ingresada'
-    const [ventas] = await pool.execute(
-      'SELECT * FROM ventas_scoring WHERE id = ? AND estado = ?',
-      [id, ESTADOS.INGRESADA]
-    );
-    
-    if (ventas.length === 0) {
-      return res.status(404).json({ error: 'Venta no disponible para tomar' });
-    }
-    
-    // Asignar al usuario de scoring
-    await pool.execute(`
-      UPDATE ventas_scoring 
-      SET estado = 'asignada',
-          scoring_user_id = ?,
-          asignada_at = NOW()
-      WHERE id = ?
-    `, [userId, id]);
-    
-    await crearNota(pool, id, userId, 'cambio_estado',
-      `Venta tomada por ${name}`,
-      ESTADOS.INGRESADA, ESTADOS.ASIGNADA);
-    
-    const [updated] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [id]);
-    
-    // Notificar a otros que ya fue tomada
-    if (io) {
-      io.to('scoring_team').emit('scoring:venta_tomada', { ventaId: id, scoringUser: name });
-    }
-    
-    res.json(updated[0]);
-    
-  } catch (error) {
-    console.error('Error tomando venta:', error);
-    res.status(500).json({ error: 'Error al tomar la venta' });
-  }
-});
-
-// ============================================
-// 6. CAMBIAR ESTADO (Scoring evalúa)
-// ============================================
-router.post('/:id/estado', authMiddleware, async (req, res) => {
-  const pool = req.app.get('db');
-  const io = req.app.get('io');
-  const { id } = req.params;
-  const { id: userId, role, name } = req.user;
-  const { estado, notas_scoring, motivo_rechazo } = req.body;
-  
-  if (!ROLES_SCORING.includes(role) && !ROLES_COBRANZA.includes(role)) {
-    return res.status(403).json({ error: 'No tenés permiso para cambiar estados' });
-  }
-  
-  try {
-    const [ventas] = await pool.execute('SELECT * FROM ventas_scoring WHERE id = ?', [id]);
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
     
     if (ventas.length === 0) {
       return res.status(404).json({ error: 'Venta no encontrada' });
     }
     
     const venta = ventas[0];
-    const estadoAnterior = venta.estado;
     
-    // Validar transiciones de estado permitidas
-    const transicionesValidas = {
-      'asignada': ['en_proceso', 'observada', 'rechazada', 'pendiente_pago'],
-      'en_proceso': ['en_proceso', 'observada', 'rechazada', 'pendiente_pago'],
-      'pendiente_pago': ['seña', 'finalizada'],
-      'seña': ['finalizada'],
-      'finalizada': ['cargada_concesionario']
-    };
+    if (venta.estado !== ESTADOS.INGRESADA) {
+      return res.status(400).json({ error: 'Esta venta no está disponible para tomar' });
+    }
     
-    if (!transicionesValidas[estadoAnterior]?.includes(estado)) {
+    if (venta.scoring_user_id && venta.scoring_user_id !== userId) {
+      return res.status(400).json({ error: 'Esta venta ya fue tomada por otro usuario' });
+    }
+    
+    // Asignar venta
+    await pool.query(`
+      UPDATE ventas_scoring 
+      SET estado = ?, scoring_user_id = ?, tomada_scoring_at = NOW()
+      WHERE id = ?
+    `, [ESTADOS.ASIGNADA, userId, id]);
+    
+    await crearNota(pool, id, userId, 'cambio_estado', ESTADOS.INGRESADA, ESTADOS.ASIGNADA, 'Venta tomada por scoring');
+    
+    if (io) {
+      io.emit('scoring:venta_tomada', { ventaId: id, scoringUserId: userId });
+    }
+    
+    res.json({ ok: true, mensaje: 'Venta asignada correctamente' });
+    
+  } catch (error) {
+    console.error('Error al tomar venta:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 6. CAMBIAR ESTADO (Scoring/Cobranza)
+// ============================================
+router.post('/:id/estado', authMiddleware, async (req, res) => {
+  const pool = req.app.get('db');
+  const io = req.app.get('io');
+  const { id } = req.params;
+  const { id: userId, role } = req.user;
+  const { nuevo_estado, notas, motivo_rechazo } = req.body;
+  
+  try {
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
+    
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    const estadoActual = venta.estado;
+    
+    // Verificar transición permitida
+    const transicionesPermitidas = TRANSICIONES_PERMITIDAS[estadoActual] || [];
+    if (!transicionesPermitidas.includes(nuevo_estado)) {
       return res.status(400).json({ 
-        error: `No se puede cambiar de ${estadoAnterior} a ${estado}` 
+        error: `No se puede pasar de "${estadoActual}" a "${nuevo_estado}"`,
+        transiciones_permitidas: transicionesPermitidas
       });
+    }
+    
+    // Verificar permisos según el nuevo estado
+    let tienePermiso = false;
+    
+    if (['asignada', 'en_proceso', 'observada', 'rechazada', 'pendiente_pago'].includes(nuevo_estado)) {
+      tienePermiso = ROLES_SCORING.includes(role) && (venta.scoring_user_id === userId || role === 'jefe_scoring' || role === 'owner');
+    } else if (['seña', 'finalizada', 'cargada_concesionario'].includes(nuevo_estado)) {
+      tienePermiso = ROLES_COBRANZA.includes(role) || role === 'owner';
+    }
+    
+    if (!tienePermiso) {
+      return res.status(403).json({ error: 'No tenés permiso para este cambio de estado' });
+    }
+    
+    // Validaciones específicas
+    if (nuevo_estado === ESTADOS.RECHAZADA && !motivo_rechazo) {
+      return res.status(400).json({ error: 'El motivo de rechazo es obligatorio' });
+    }
+    if (nuevo_estado === ESTADOS.OBSERVADA && !notas) {
+      return res.status(400).json({ error: 'Las notas son obligatorias para observar' });
     }
     
     // Construir query de actualización
-    let updateQuery = 'UPDATE ventas_scoring SET estado = ?';
-    const updateParams = [estado];
+    let updateQuery = `UPDATE ventas_scoring SET estado = ?`;
+    const updateParams = [nuevo_estado];
     
-    if (notas_scoring) {
-      updateQuery += ', notas_scoring = ?';
-      updateParams.push(notas_scoring);
+    if (notas) {
+      updateQuery += `, notas_scoring = CONCAT(IFNULL(notas_scoring, ''), '\n[${new Date().toISOString()}] ', ?)`;
+      updateParams.push(notas);
     }
-    
-    if (motivo_rechazo && ['observada', 'rechazada'].includes(estado)) {
-      updateQuery += ', motivo_rechazo = ?';
+    if (motivo_rechazo) {
+      updateQuery += `, motivo_rechazo = ?`;
       updateParams.push(motivo_rechazo);
     }
     
-    if (estado === 'pendiente_pago') {
-      updateQuery += ', scoring_resuelto_at = NOW()';
+    // Timestamps específicos
+    if (nuevo_estado === ESTADOS.PENDIENTE_PAGO) {
+      updateQuery += `, scoring_completado_at = NOW()`;
+    } else if (nuevo_estado === ESTADOS.FINALIZADA) {
+      updateQuery += `, cobranza_completada_at = NOW()`;
+    } else if (nuevo_estado === ESTADOS.CARGADA_CONCESIONARIO) {
+      updateQuery += `, cargada_concesionario_at = NOW()`;
     }
     
-    if (['seña', 'finalizada'].includes(estado)) {
-      updateQuery += ', cobrado_at = NOW(), cobranza_user_id = ?';
+    // Asignar usuario de cobranza si corresponde
+    if (['seña', 'finalizada', 'cargada_concesionario'].includes(nuevo_estado) && !venta.cobranza_user_id) {
+      updateQuery += `, cobranza_user_id = ?`;
       updateParams.push(userId);
     }
     
-    if (estado === 'cargada_concesionario') {
-      updateQuery += ', cargado_concesionario_at = NOW()';
-    }
-    
-    updateQuery += ' WHERE id = ?';
+    updateQuery += ` WHERE id = ?`;
     updateParams.push(id);
     
-    await pool.execute(updateQuery, updateParams);
+    await pool.query(updateQuery, updateParams);
     
-    // Crear nota
-    let mensaje = `Estado cambiado de ${estadoAnterior} a ${estado}`;
-    if (motivo_rechazo) {
-      mensaje += `. Motivo: ${motivo_rechazo}`;
-    }
+    // Crear nota de cambio
+    await crearNota(pool, id, userId, 'cambio_estado', estadoActual, nuevo_estado, notas || motivo_rechazo || 'Cambio de estado');
     
-    await crearNota(pool, id, userId, 'cambio_estado', mensaje, estadoAnterior, estado);
-    
-    // Si es rechazo u observada, notificar a vendedor/supervisor/gerente
-    if (['observada', 'rechazada'].includes(estado)) {
-      // Notificar al vendedor
-      await crearAlertaScoring(pool, io, id, 'cambio_estado',
-        `Venta ${estado}: ${motivo_rechazo || 'Sin motivo especificado'}`,
-        venta.vendedor_id);
+    // Notificar si es rechazo u observación
+    if ([ESTADOS.RECHAZADA, ESTADOS.OBSERVADA].includes(nuevo_estado)) {
+      const notificarA = [venta.vendedor_id, venta.supervisor_id].filter(Boolean);
       
-      // Notificar al supervisor
-      if (venta.supervisor_id) {
-        await crearAlertaScoring(pool, io, id, 'cambio_estado',
-          `Venta de su equipo ${estado}: ${motivo_rechazo || 'Sin motivo'}`,
-          venta.supervisor_id);
+      for (const targetUserId of notificarA) {
+        await crearAlerta(pool, id, targetUserId, nuevo_estado === ESTADOS.RECHAZADA ? 'venta_rechazada' : 'venta_observada', 
+          `Venta ${nuevo_estado}: ${motivo_rechazo || notas}`);
+        
+        if (io) {
+          io.to(`user_${targetUserId}`).emit('scoring:alerta', {
+            tipo: nuevo_estado === ESTADOS.RECHAZADA ? 'venta_rechazada' : 'venta_observada',
+            ventaId: id,
+            mensaje: motivo_rechazo || notas
+          });
+        }
       }
     }
     
-    // Si pasa a pendiente_pago, notificar a cobranza
-    if (estado === 'pendiente_pago') {
-      // Obtener usuarios de cobranza
-      const [cobranzaUsers] = await pool.execute(
-        "SELECT id FROM users WHERE role = 'cobranza' AND active = 1"
-      );
-      
-      for (const u of cobranzaUsers) {
-        await crearAlertaScoring(pool, io, id, 'nueva_venta',
-          'Nueva venta lista para cobrar', u.id);
-      }
-    }
-    
-    const [updated] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [id]);
-    
-    // Emitir actualización por WebSocket
     if (io) {
-      io.emit('scoring:estado_cambiado', { 
-        ventaId: id, 
-        estadoAnterior, 
-        estadoNuevo: estado,
-        usuario: name 
-      });
+      io.emit('scoring:estado_cambiado', { ventaId: id, estadoAnterior: estadoActual, nuevoEstado: nuevo_estado });
     }
     
-    res.json(updated[0]);
+    res.json({ ok: true, mensaje: `Estado cambiado a "${nuevo_estado}"` });
     
   } catch (error) {
-    console.error('Error cambiando estado:', error);
-    res.status(500).json({ error: 'Error al cambiar el estado' });
+    console.error('Error al cambiar estado:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -542,66 +524,83 @@ router.post('/:id/estado', authMiddleware, async (req, res) => {
 router.put('/:id/montos', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const { id } = req.params;
-  const { role } = req.user;
+  const { id: userId, role } = req.user;
   const { monto_total, monto_seña, notas_cobranza } = req.body;
   
-  if (!ROLES_COBRANZA.includes(role)) {
+  if (!ROLES_COBRANZA.includes(role) && role !== 'owner') {
     return res.status(403).json({ error: 'No tenés permiso para actualizar montos' });
   }
   
   try {
-    await pool.execute(`
-      UPDATE ventas_scoring 
-      SET monto_total = ?, monto_seña = ?, notas_cobranza = ?
-      WHERE id = ?
-    `, [monto_total, monto_seña, notas_cobranza, id]);
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
     
-    const [updated] = await pool.execute('SELECT * FROM v_scoring_dashboard WHERE id = ?', [id]);
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
     
-    res.json(updated[0]);
+    const venta = ventas[0];
+    
+    if (!['pendiente_pago', 'seña', 'finalizada'].includes(venta.estado)) {
+      return res.status(400).json({ error: 'Solo se pueden actualizar montos en estados de cobranza' });
+    }
+    
+    let updateFields = [];
+    let updateParams = [];
+    
+    if (monto_total !== undefined) {
+      updateFields.push('monto_total = ?');
+      updateParams.push(monto_total);
+    }
+    if (monto_seña !== undefined) {
+      updateFields.push('monto_seña = ?');
+      updateParams.push(monto_seña);
+    }
+    if (notas_cobranza) {
+      updateFields.push(`notas_cobranza = CONCAT(IFNULL(notas_cobranza, ''), '\n[${new Date().toISOString()}] ', ?)`);
+      updateParams.push(notas_cobranza);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: 'No hay campos para actualizar' });
+    }
+    
+    updateParams.push(id);
+    
+    await pool.query(`UPDATE ventas_scoring SET ${updateFields.join(', ')} WHERE id = ?`, updateParams);
+    
+    await crearNota(pool, id, userId, 'actualizacion', null, null, `Montos actualizados: ${JSON.stringify({ monto_total, monto_seña })}`);
+    
+    res.json({ ok: true, mensaje: 'Montos actualizados correctamente' });
     
   } catch (error) {
-    console.error('Error actualizando montos:', error);
-    res.status(500).json({ error: 'Error al actualizar montos' });
+    console.error('Error al actualizar montos:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 // ============================================
-// 8. OBTENER ALERTAS DE SCORING
+// 8. OBTENER MIS ALERTAS
 // ============================================
 router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
-  const { id: userId, role } = req.user;
+  const { id: userId } = req.user;
   
   try {
-    let query = `
-      SELECT sa.*, vs.pv, l.nombre as cliente_nombre
+    const [alertas] = await pool.query(`
+      SELECT sa.*, vs.lead_id, l.nombre as lead_nombre
       FROM scoring_alertas sa
-      JOIN ventas_scoring vs ON sa.venta_id = vs.id
-      JOIN leads l ON vs.lead_id = l.id
-      WHERE sa.leida = 0
-    `;
-    const params = [];
+      LEFT JOIN ventas_scoring vs ON sa.venta_id = vs.id
+      LEFT JOIN leads l ON vs.lead_id = l.id
+      WHERE sa.user_id = ? AND sa.leida = FALSE
+      ORDER BY sa.created_at DESC
+      LIMIT 50
+    `, [userId]);
     
-    if (ROLES_SCORING.includes(role)) {
-      // Scoring ve alertas sin usuario específico (para el equipo) y las propias
-      query += ' AND (sa.user_id IS NULL OR sa.user_id = ?)';
-      params.push(userId);
-    } else {
-      // Otros roles solo ven sus alertas específicas
-      query += ' AND sa.user_id = ?';
-      params.push(userId);
-    }
-    
-    query += ' ORDER BY sa.created_at DESC LIMIT 50';
-    
-    const [alertas] = await pool.execute(query, params);
-    
-    res.json(alertas);
+    res.json({ ok: true, alertas });
     
   } catch (error) {
-    console.error('Error obteniendo alertas:', error);
-    res.status(500).json({ error: 'Error al obtener alertas' });
+    console.error('Error al obtener alertas:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -611,110 +610,108 @@ router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
 router.post('/alertas/:alertaId/leer', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const { alertaId } = req.params;
+  const { id: userId } = req.user;
   
   try {
-    await pool.execute(`
+    await pool.query(`
       UPDATE scoring_alertas 
-      SET leida = 1, leida_at = NOW()
-      WHERE id = ?
-    `, [alertaId]);
+      SET leida = TRUE, leida_at = NOW()
+      WHERE id = ? AND user_id = ?
+    `, [alertaId, userId]);
     
     res.json({ ok: true });
     
   } catch (error) {
-    console.error('Error marcando alerta:', error);
-    res.status(500).json({ error: 'Error al marcar alerta' });
+    console.error('Error al marcar alerta como leída:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 // ============================================
-// 10. DASHBOARD/ESTADÍSTICAS
+// 10. ESTADÍSTICAS Y MÉTRICAS
 // ============================================
 router.get('/stats/dashboard', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const { id: userId, role } = req.user;
-  const { desde, hasta } = req.query;
+  const { fecha_desde, fecha_hasta } = req.query;
   
   try {
-    let whereClause = 'WHERE 1=1';
+    let whereClause = '1=1';
     const params = [];
     
     // Filtrar según rol
-    if (role === 'vendedor') {
-      whereClause += ' AND vendedor_id = ?';
-      params.push(userId);
-    } else if (role === 'supervisor') {
-      const [vendors] = await pool.execute('SELECT id FROM users WHERE reportsTo = ?', [userId]);
-      const ids = [userId, ...vendors.map(v => v.id)];
-      whereClause += ` AND vendedor_id IN (${ids.map(() => '?').join(',')})`;
-      params.push(...ids);
+    if (!ROLES_VER_TODO.includes(role)) {
+      if (role === 'vendedor') {
+        whereClause += ' AND vendedor_id = ?';
+        params.push(userId);
+      } else if (['supervisor', 'gerente'].includes(role)) {
+        whereClause += ' AND (vendedor_id = ? OR supervisor_id = ?)';
+        params.push(userId, userId);
+      }
     }
-    // gerente, director, owner ven todo
     
-    if (desde) {
+    if (fecha_desde) {
       whereClause += ' AND fecha_venta >= ?';
-      params.push(desde);
+      params.push(fecha_desde);
     }
-    if (hasta) {
+    if (fecha_hasta) {
       whereClause += ' AND fecha_venta <= ?';
-      params.push(hasta);
+      params.push(fecha_hasta);
     }
     
-    // Contar por estado
-    const [porEstado] = await pool.execute(`
-      SELECT estado, COUNT(*) as cantidad
+    // Estadísticas por estado
+    const [estadoStats] = await pool.query(`
+      SELECT 
+        estado,
+        COUNT(*) as cantidad
       FROM ventas_scoring
-      ${whereClause}
+      WHERE ${whereClause}
       GROUP BY estado
     `, params);
     
-    // Total de ventas
-    const [total] = await pool.execute(`
-      SELECT COUNT(*) as total FROM ventas_scoring ${whereClause}
+    // Tiempo promedio por etapa
+    const [tiempoStats] = await pool.query(`
+      SELECT 
+        AVG(TIMESTAMPDIFF(MINUTE, created_at, autorizado_at)) as avg_tiempo_autorizacion,
+        AVG(TIMESTAMPDIFF(MINUTE, autorizado_at, tomada_scoring_at)) as avg_tiempo_tomar,
+        AVG(TIMESTAMPDIFF(MINUTE, tomada_scoring_at, scoring_completado_at)) as avg_tiempo_scoring,
+        AVG(TIMESTAMPDIFF(MINUTE, scoring_completado_at, cobranza_completada_at)) as avg_tiempo_cobranza
+      FROM ventas_scoring
+      WHERE ${whereClause}
     `, params);
     
-    // Ventas por vendedor (solo para supervisores+)
-    let porVendedor = [];
-    if (['supervisor', 'gerente', 'director', 'owner', 'jefe_scoring'].includes(role)) {
-      const [vendedores] = await pool.execute(`
+    // Top vendedores (solo para roles superiores)
+    let topVendedores = [];
+    if (ROLES_VER_TODO.includes(role) || ['gerente', 'jefe_scoring'].includes(role)) {
+      const [vendedores] = await pool.query(`
         SELECT 
-          vs.vendedor_id,
-          u.name as vendedor_nombre,
-          COUNT(*) as total,
-          SUM(CASE WHEN vs.estado = 'finalizada' OR vs.estado = 'cargada_concesionario' THEN 1 ELSE 0 END) as finalizadas,
-          SUM(CASE WHEN vs.estado = 'rechazada' THEN 1 ELSE 0 END) as rechazadas
-        FROM ventas_scoring vs
-        JOIN users u ON vs.vendedor_id = u.id
-        ${whereClause}
-        GROUP BY vs.vendedor_id
-        ORDER BY finalizadas DESC
-      `, params);
-      porVendedor = vendedores;
+          u.id,
+          u.name,
+          COUNT(vs.id) as total_ventas,
+          SUM(CASE WHEN vs.estado = 'finalizada' THEN 1 ELSE 0 END) as ventas_finalizadas,
+          SUM(CASE WHEN vs.estado = 'rechazada' THEN 1 ELSE 0 END) as ventas_rechazadas
+        FROM users u
+        LEFT JOIN ventas_scoring vs ON u.id = vs.vendedor_id
+        WHERE u.role = 'vendedor'
+        GROUP BY u.id
+        ORDER BY ventas_finalizadas DESC
+        LIMIT 10
+      `);
+      topVendedores = vendedores;
     }
     
-    // Tiempos promedio
-    const [tiempos] = await pool.execute(`
-      SELECT 
-        AVG(TIMESTAMPDIFF(MINUTE, created_at, autorizado_at)) as promedio_autorizacion,
-        AVG(TIMESTAMPDIFF(MINUTE, autorizado_at, asignada_at)) as promedio_toma,
-        AVG(TIMESTAMPDIFF(MINUTE, asignada_at, scoring_resuelto_at)) as promedio_scoring
-      FROM ventas_scoring
-      ${whereClause}
-    `, params);
-    
     res.json({
-      total: total[0].total,
-      porEstado: porEstado.reduce((acc, row) => {
-        acc[row.estado] = row.cantidad;
-        return acc;
-      }, {}),
-      porVendedor,
-      tiemposPromedio: tiempos[0]
+      ok: true,
+      estadisticas: {
+        por_estado: estadoStats,
+        tiempos_promedio: tiempoStats[0],
+        top_vendedores: topVendedores
+      }
     });
     
   } catch (error) {
-    console.error('Error obteniendo stats:', error);
-    res.status(500).json({ error: 'Error al obtener estadísticas' });
+    console.error('Error al obtener estadísticas:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
