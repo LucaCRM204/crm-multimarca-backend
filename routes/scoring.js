@@ -1,8 +1,10 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING (CORREGIDO)
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING (CORREGIDO v2)
  * ============================================
- * Endpoints para gestión de ventas y scoring
+ * CAMBIOS:
+ * 1. Alerta va al supervisor del VENDEDOR, no del lead
+ * 2. Respuestas de alertas normalizadas
  */
 
 const express = require('express');
@@ -115,20 +117,20 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       return res.status(400).json({ error: 'lead_id y fecha_venta son obligatorios' });
     }
     
-    // Obtener info del lead para determinar supervisor
-    const [leadRows] = await pool.query(`
-      SELECT l.*, u.reportsTo as supervisor_id
-      FROM leads l
-      LEFT JOIN users u ON l.assigned_to = u.id
-      WHERE l.id = ?
-    `, [lead_id]);
+    // Obtener info del lead
+    const [leadRows] = await pool.query(`SELECT * FROM leads WHERE id = ?`, [lead_id]);
     
     if (leadRows.length === 0) {
       return res.status(404).json({ error: 'Lead no encontrado' });
     }
     
     const lead = leadRows[0];
-    const supervisorId = lead.supervisor_id || null;
+    
+    // ✅ CORREGIDO: Obtener el supervisor del VENDEDOR que está creando la venta
+    const [userRows] = await pool.query(`SELECT reportsTo FROM users WHERE id = ?`, [userId]);
+    const supervisorId = userRows[0]?.reportsTo || null;
+    
+    console.log('📧 Creando venta - Vendedor ID:', userId, '- Supervisor ID:', supervisorId);
     
     // Crear la venta
     const [result] = await pool.query(`
@@ -142,8 +144,9 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     // Crear nota de creación
     await crearNota(pool, ventaId, userId, 'creacion', null, ESTADOS.PENDIENTE_SUPERVISOR, 'Venta creada por vendedor');
     
-    // Crear alerta para supervisor
+    // ✅ Crear alerta para el supervisor del vendedor
     if (supervisorId) {
+      console.log('🔔 Creando alerta para supervisor ID:', supervisorId);
       await crearAlerta(pool, ventaId, supervisorId, 'nueva_venta', `Nueva venta pendiente de autorización: ${lead.nombre}`);
       
       // Emitir evento WebSocket
@@ -154,6 +157,8 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
           mensaje: `Nueva venta pendiente de autorización: ${lead.nombre}`
         });
       }
+    } else {
+      console.log('⚠️ El vendedor no tiene supervisor asignado');
     }
     
     res.status(201).json({ 
@@ -225,7 +230,7 @@ router.get('/', authMiddleware, async (req, res) => {
     
     const [ventas] = await pool.query(query, params);
     
-    res.json({ ok: true, ventas });
+    res.json(ventas);
     
   } catch (error) {
     console.error('Error al listar ventas:', error);
@@ -586,7 +591,8 @@ router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
       LIMIT 50
     `, [userId]);
     
-    res.json({ ok: true, alertas });
+    // ✅ Devolver array directamente para consistencia
+    res.json(alertas);
     
   } catch (error) {
     console.error('Error al obtener alertas:', error);
