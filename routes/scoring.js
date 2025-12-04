@@ -15,10 +15,10 @@ const fs = require('fs');
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const dir = '/tmp/scoring';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
-    cb(null, uploadDir);
+    cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -109,7 +109,7 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
   
   try {
     const { lead_id, fecha_venta, notas_vendedor } = req.body;
-    const pdfUrl = req.file ? `/uploads/scoring/${req.file.filename}` : null;
+    const pdfUrl = req.file ? `/tmp/scoring/${req.file.filename}` : null;
     
     if (!lead_id || !fecha_venta) {
       return res.status(400).json({ error: 'lead_id y fecha_venta son obligatorios' });
