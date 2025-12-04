@@ -1,12 +1,11 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING v6
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING v7
  * ============================================
- * CAMBIOS v6:
- * - Sistema de mensajes internos entre Scoring y Supervisores
- * - Guardar fecha/hora cuando se observa una venta
- * - Endpoint para marcar observación como resuelta
- * - Notificaciones de mensajes nuevos
+ * CAMBIOS v7:
+ * - CORREGIDO: Permisos de autorización para supervisores
+ * - Supervisor puede autorizar ventas de vendedores que le reportan
+ * - Gerente puede autorizar ventas de todo su equipo
  */
 
 const express = require('express');
@@ -141,6 +140,52 @@ async function crearMensajeInterno(pool, ventaId, remitenteId, destinatarioId, m
 }
 
 // ============================================
+// HELPER: Verificar si usuario puede autorizar venta
+// ============================================
+async function puedeAutorizarVenta(pool, userId, role, venta) {
+  // Owner y Director pueden autorizar cualquier venta
+  if (role === 'owner' || role === 'director') {
+    return true;
+  }
+  
+  // Supervisor puede autorizar si es el supervisor directo del vendedor
+  if (role === 'supervisor') {
+    // Si es el supervisor guardado en la venta
+    if (venta.supervisor_id === userId) {
+      return true;
+    }
+    
+    // O si el vendedor reporta directamente a este supervisor
+    const [esSubordinado] = await pool.query(`
+      SELECT 1 FROM users WHERE id = ? AND reportsTo = ? LIMIT 1
+    `, [venta.vendedor_id, userId]);
+    
+    if (esSubordinado.length > 0) {
+      return true;
+    }
+  }
+  
+  // Gerente puede autorizar ventas de todo su equipo
+  if (role === 'gerente') {
+    const [esDeEquipo] = await pool.query(`
+      SELECT 1 FROM users u
+      WHERE u.id = ? 
+      AND (
+        u.reportsTo = ? 
+        OR u.reportsTo IN (SELECT id FROM users WHERE reportsTo = ?)
+      )
+      LIMIT 1
+    `, [venta.vendedor_id, userId, userId]);
+    
+    if (esDeEquipo.length > 0) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// ============================================
 // 1. CREAR VENTA (Vendedor)
 // ============================================
 router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
@@ -256,9 +301,18 @@ router.get('/', authMiddleware, async (req, res) => {
       params.push(userId);
     } else if (role === 'cobranza') {
       query += ` AND estado IN ('pendiente_pago', 'seña', 'finalizada', 'cargada_concesionario')`;
-    } else if (ROLES_AUTORIZACION.includes(role)) {
-      query += ` AND (vendedor_id = ? OR supervisor_id = ?)`;
-      params.push(userId, userId);
+    } else if (role === 'gerente') {
+      // Gerente ve ventas de su equipo completo
+      query += ` AND (vendedor_id = ? OR supervisor_id = ? OR vendedor_id IN (
+        SELECT id FROM users WHERE reportsTo = ? OR reportsTo IN (SELECT id FROM users WHERE reportsTo = ?)
+      ))`;
+      params.push(userId, userId, userId, userId);
+    } else if (role === 'supervisor') {
+      // Supervisor ve ventas propias y de vendedores que le reportan
+      query += ` AND (vendedor_id = ? OR supervisor_id = ? OR vendedor_id IN (
+        SELECT id FROM users WHERE reportsTo = ?
+      ))`;
+      params.push(userId, userId, userId);
     } else if (role === 'vendedor') {
       query += ` AND vendedor_id = ?`;
       params.push(userId);
@@ -352,7 +406,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 4. AUTORIZAR VENTA (Supervisor)
+// 4. AUTORIZAR VENTA (Supervisor/Gerente) - CORREGIDO v7
 // ============================================
 router.post('/:id/autorizar', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -378,7 +432,10 @@ router.post('/:id/autorizar', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Esta venta ya fue procesada' });
     }
     
-    if (role !== 'owner' && role !== 'director' && venta.supervisor_id !== userId) {
+    // VERIFICAR PERMISOS - CORREGIDO v7
+    const puedeAutorizar = await puedeAutorizarVenta(pool, userId, role, venta);
+    
+    if (!puedeAutorizar) {
       return res.status(403).json({ error: 'Solo podés autorizar ventas de tu equipo' });
     }
     
@@ -407,7 +464,7 @@ router.post('/:id/autorizar', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 4.1 RECHAZAR VENTA (Supervisor) - CON CAMBIO DE LEAD
+// 4.1 RECHAZAR VENTA (Supervisor) - CON CAMBIO DE LEAD - CORREGIDO v7
 // ============================================
 router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
@@ -437,7 +494,10 @@ router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Esta venta ya fue procesada' });
     }
     
-    if (role !== 'owner' && role !== 'director' && venta.supervisor_id !== userId) {
+    // VERIFICAR PERMISOS - CORREGIDO v7
+    const puedeRechazar = await puedeAutorizarVenta(pool, userId, role, venta);
+    
+    if (!puedeRechazar) {
       return res.status(403).json({ error: 'Solo podés rechazar ventas de tu equipo' });
     }
     
