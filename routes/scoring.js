@@ -13,8 +13,8 @@ const fs = require('fs');
 
 // Configuración de multer para subir PDFs
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = './uploads/scoring';
+  destination: function (req, file, cb) {
+    const dir = '/tmp/scoring';
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
