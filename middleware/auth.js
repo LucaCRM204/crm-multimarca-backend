@@ -1,42 +1,113 @@
+/**
+ * ============================================
+ * AUTH MIDDLEWARE
+ * ============================================
+ * Middleware para autenticar y autorizar usuarios
+ */
+
 const jwt = require('jsonwebtoken');
-const rateLimit = require('express-rate-limit');
 
-// Rate limiting por endpoint
-const createRateLimit = (windowMs, max, message) => {
-  return rateLimit({
-    windowMs,
-    max,
-    message: { error: message },
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-};
+/**
+ * Middleware para verificar token JWT
+ */
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
-// Rate limits específicos
-const authLimiter = createRateLimit(15 * 60 * 1000, 5, 'Demasiados intentos de login, intenta en 15 minutos');
-const apiLimiter = createRateLimit(15 * 60 * 1000, 100, 'Demasiadas peticiones, intenta en 15 minutos');
+  if (!token) {
+    return res.status(401).json({ ok: false, error: 'Token requerido' });
+  }
 
-// Middleware de autenticación con logging
-const authenticateToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({ error: 'Token de acceso requerido' });
-    }
-
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Log de actividad
-    console.log(`User ${decoded.email} accessing ${req.method} ${req.path}`);
-    
     req.user = decoded;
     next();
-  } catch (error) {
-    console.error('Auth error:', error.message);
-    return res.status(403).json({ error: 'Token inválido' });
+  } catch (err) {
+    console.error('Token verification error:', err.message);
+    return res.status(403).json({ ok: false, error: 'Token inválido o expirado' });
   }
 };
 
-module.exports = { authenticateToken, authLimiter, apiLimiter };
+/**
+ * Middleware para verificar roles
+ * @param {string[]} allowedRoles - Roles permitidos
+ */
+const requireRole = (allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ ok: false, error: 'No autenticado' });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ 
+        ok: false, 
+        error: 'No tienes permisos para esta acción',
+        requiredRoles: allowedRoles,
+        yourRole: req.user.role
+      });
+    }
+
+    next();
+  };
+};
+
+/**
+ * Middleware para verificar que es el owner o tiene rol específico
+ */
+const requireOwnerOrRole = (allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ ok: false, error: 'No autenticado' });
+    }
+
+    // El owner siempre puede
+    if (req.user.role === 'owner') {
+      return next();
+    }
+
+    // Verificar roles permitidos
+    if (allowedRoles.includes(req.user.role)) {
+      return next();
+    }
+
+    return res.status(403).json({ 
+      ok: false, 
+      error: 'No tienes permisos para esta acción'
+    });
+  };
+};
+
+/**
+ * Middleware para verificar que el usuario accede a sus propios recursos
+ * o tiene rol de supervisor/gerente/etc
+ */
+const requireSelfOrSupervisor = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ ok: false, error: 'No autenticado' });
+  }
+
+  const targetUserId = parseInt(req.params.userId || req.params.id);
+  
+  // Es su propio recurso
+  if (req.user.id === targetUserId) {
+    return next();
+  }
+
+  // Es supervisor o superior
+  const supervisorRoles = ['owner', 'director', 'gerente', 'supervisor'];
+  if (supervisorRoles.includes(req.user.role)) {
+    return next();
+  }
+
+  return res.status(403).json({ 
+    ok: false, 
+    error: 'Solo puedes acceder a tus propios recursos'
+  });
+};
+
+module.exports = {
+  authenticateToken,
+  requireRole,
+  requireOwnerOrRole,
+  requireSelfOrSupervisor
+};
