@@ -1,12 +1,11 @@
 /**
  * ============================================
- * ROUTES/LEADS.JS - CON ESTADOS PROTEGIDOS
+ * ROUTES/LEADS.JS - CON SISTEMA DE ACEPTACIÓN
  * ============================================
- * CAMBIOS:
- * - Estados protegidos: rechazado_supervisor, rechazado_scoring
- * - Nadie puede cambiar manualmente A estos estados
- * - Nadie puede cambiar DESDE estos estados (excepto owner)
- * - Nuevo endpoint /reactivar solo para owner
+ * FEATURES:
+ * - Estados protegidos (rechazado_supervisor, rechazado_scoring)
+ * - Sistema de aceptación con timeout de 10 min
+ * - Solo en horario laboral (9:30 - 19:30)
  */
 
 const router = require('express').Router();
@@ -14,16 +13,20 @@ const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
 
+// Importar funciones del socket server
+let socketFunctions = null;
+try {
+  socketFunctions = require('../socket-server');
+} catch (e) {
+  console.log('Socket server not loaded yet');
+}
+
 // ============================================
 // ESTADOS PROTEGIDOS
 // ============================================
 const ESTADOS_PROTEGIDOS = ['rechazado_supervisor', 'rechazado_scoring'];
 
-/**
- * Valida si un cambio de estado de lead es permitido
- */
 function validarCambioEstadoLead(estadoActual, nuevoEstado, role, esAutomatico = false) {
-  // Si el estado actual es protegido, solo owner puede cambiarlo
   if (ESTADOS_PROTEGIDOS.includes(estadoActual)) {
     if (role !== 'owner') {
       return {
@@ -33,36 +36,32 @@ function validarCambioEstadoLead(estadoActual, nuevoEstado, role, esAutomatico =
     }
   }
   
-  // Nadie puede cambiar manualmente A un estado protegido
   if (ESTADOS_PROTEGIDOS.includes(nuevoEstado) && !esAutomatico) {
     return {
       permitido: false,
-      error: `No se puede cambiar manualmente a "${nuevoEstado}". Este estado solo se asigna automáticamente cuando se rechaza en scoring.`
+      error: `No se puede cambiar manualmente a "${nuevoEstado}". Este estado solo se asigna automáticamente.`
     };
   }
   
   return { permitido: true };
 }
 
-// Utilidad para mapear assigned_to -> vendedor
+// Utilidad para mapear
 const mapLead = (row) => ({
   ...row,
   vendedor: row.assigned_to ?? null,
 });
 
-// 🔐 HELPER: Validar si el usuario puede asignar a un vendedor específico
+// Helper: Validar permisos de asignación
 const canAssignToVendor = async (userId, userRole, targetVendorId) => {
-  // Owner y Director pueden asignar a cualquiera
   if (['owner', 'dueño', 'director'].includes(userRole)) {
     return true;
   }
 
-  // Si intenta asignarse a sí mismo, siempre puede
   if (userId === targetVendorId) {
     return true;
   }
 
-  // Obtener información del vendedor objetivo
   const [targetUser] = await pool.execute(
     'SELECT id, role, reportsTo FROM users WHERE id = ?',
     [targetVendorId]
@@ -74,14 +73,11 @@ const canAssignToVendor = async (userId, userRole, targetVendorId) => {
 
   const target = targetUser[0];
 
-  // Gerente puede asignar a su equipo (supervisores y vendedores bajo él)
   if (userRole === 'gerente') {
-    // Verificar si reporta directamente al gerente
     if (target.reportsTo === userId) {
       return true;
     }
     
-    // Verificar si reporta a un supervisor que reporta al gerente
     if (target.reportsTo) {
       const [supervisor] = await pool.execute(
         'SELECT reportsTo FROM users WHERE id = ?',
@@ -95,19 +91,52 @@ const canAssignToVendor = async (userId, userRole, targetVendorId) => {
     return false;
   }
 
-  // Supervisor solo puede asignar a vendedores que reportan directamente a él
   if (userRole === 'supervisor') {
     return target.reportsTo === userId;
   }
 
-  // Vendedor solo puede asignarse a sí mismo (ya verificado arriba)
   return false;
 };
+
+// ============================================
+// HELPER: Verificar horario laboral
+// ============================================
+function isWorkingHours() {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = 9 * 60 + 30; // 9:30
+  const endMinutes = 19 * 60 + 30;  // 19:30
+  
+  const dayOfWeek = now.getDay();
+  const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+  
+  return isWeekday && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
 
 // GET todos los leads
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT * FROM leads ORDER BY created_at DESC');
+    // Para vendedores: no mostrar leads pendientes de aceptación de OTROS
+    // Solo mostrar sus propios leads aceptados
+    const { role, id: userId } = req.user;
+    
+    let query = 'SELECT * FROM leads';
+    let params = [];
+    
+    if (role === 'vendedor') {
+      // Vendedor solo ve leads que aceptó O que no están en pending
+      query = `
+        SELECT * FROM leads 
+        WHERE (assigned_to = ? AND pending_acceptance = FALSE)
+           OR (pending_acceptance = FALSE AND assigned_to IS NULL)
+        ORDER BY created_at DESC
+      `;
+      params = [userId];
+    } else {
+      query = 'SELECT * FROM leads ORDER BY created_at DESC';
+    }
+    
+    const [rows] = await pool.execute(query, params);
     const leads = rows.map(mapLead);
     res.json({ ok: true, leads });
   } catch (error) {
@@ -123,14 +152,35 @@ router.get('/:id', authenticateToken, async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Lead no encontrado' });
     }
-    res.json({ ok: true, lead: mapLead(rows[0]) });
+    
+    const lead = rows[0];
+    const { role, id: userId } = req.user;
+    
+    // Si es vendedor y el lead está pendiente de aceptación para ÉL, no mostrar datos
+    if (role === 'vendedor' && lead.pending_acceptance && lead.current_offer_to === userId) {
+      return res.json({ 
+        ok: true, 
+        lead: {
+          id: lead.id,
+          pending_acceptance: true,
+          message: 'Debés aceptar este lead para ver los datos'
+        }
+      });
+    }
+    
+    // Si es vendedor y el lead no es suyo, no mostrar
+    if (role === 'vendedor' && lead.assigned_to !== userId && lead.pending_acceptance) {
+      return res.status(403).json({ error: 'No tenés acceso a este lead' });
+    }
+    
+    res.json({ ok: true, lead: mapLead(lead) });
   } catch (error) {
     console.error('Error GET /leads/:id:', error);
     res.status(500).json({ error: 'Error al obtener lead' });
   }
 });
 
-// 📊 VER ESTADO DEL ROUND-ROBIN
+// GET estado del round-robin
 router.get('/round-robin/status', authenticateToken, async (req, res) => {
   try {
     if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
@@ -138,16 +188,14 @@ router.get('/round-robin/status', authenticateToken, async (req, res) => {
     }
 
     const status = await getRoundRobinStatus();
-    
     res.json({ ok: true, ...status });
-
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Error al obtener estado' });
   }
 });
 
-// 🔄 RESETEAR ÍNDICE (solo owner)
+// POST resetear round-robin
 router.post('/round-robin/reset', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'owner') {
@@ -155,16 +203,14 @@ router.post('/round-robin/reset', authenticateToken, async (req, res) => {
     }
 
     resetRoundRobinIndex();
-
     res.json({ ok: true, message: 'Índice round-robin reseteado a 0' });
-
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Error al resetear' });
   }
 });
 
-// 📈 VER DISTRIBUCIÓN COMPLETA
+// GET distribución de leads
 router.get('/distribution', authenticateToken, async (req, res) => {
   try {
     if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
@@ -189,14 +235,13 @@ router.get('/distribution', authenticateToken, async (req, res) => {
     `);
 
     res.json({ ok: true, distribution });
-
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Error al obtener distribución' });
   }
 });
 
-// 🆕 VER LEADS SIN ASIGNAR (sin marca o sin vendedor)
+// GET leads sin asignar
 router.get('/unassigned', authenticateToken, async (req, res) => {
   try {
     if (!['owner', 'director', 'gerente'].includes(req.user.role)) {
@@ -217,16 +262,19 @@ router.get('/unassigned', authenticateToken, async (req, res) => {
       count: leads.length,
       message: `${leads.length} leads sin asignar encontrados`
     });
-
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Error al obtener leads sin asignar' });
   }
 });
 
-// POST crear lead (desde el CRM)
+// ============================================
+// POST crear lead - CON SISTEMA DE ACEPTACIÓN
+// ============================================
 router.post('/', authenticateToken, async (req, res) => {
   try {
+    const io = req.app.get('io');
+    
     const {
       nombre,
       telefono,
@@ -243,7 +291,6 @@ router.post('/', authenticateToken, async (req, res) => {
       assigned_to = null
     } = req.body;
 
-    // 🔴 VALIDAR CAMPOS REQUERIDOS
     if (!nombre || !telefono) {
       return res.status(400).json({ 
         error: 'Campos requeridos faltantes',
@@ -254,115 +301,355 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validar marca
     if (!['vw', 'fiat', 'peugeot', 'renault'].includes(marca)) {
-      return res.status(400).json({ error: 'Marca inválida. Debe ser vw, fiat, peugeot o renault' });
+      return res.status(400).json({ error: 'Marca inválida' });
     }
 
-    // ============================================
-    // VALIDAR ESTADO PROTEGIDO EN CREACIÓN
-    // ============================================
     if (ESTADOS_PROTEGIDOS.includes(estado)) {
       return res.status(400).json({ 
-        error: `No se puede crear un lead con estado "${estado}". Este estado solo se asigna automáticamente.`
+        error: `No se puede crear un lead con estado "${estado}".`
       });
     }
 
-    // 🔐 ASIGNACIÓN CON VALIDACIÓN DE PERMISOS
+    // Determinar vendedor asignado
     let finalAssignedTo = assigned_to || vendedor;
+    const isFromBot = fuente && (fuente.includes('whatsapp') || fuente.includes('bot'));
 
     if (finalAssignedTo) {
-      const isFromBot = fuente && (fuente.includes('whatsapp') || fuente.includes('bot'));
-      
       if (!isFromBot) {
         const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
-        
         if (!hasPermission) {
-          return res.status(403).json({ 
-            error: 'No tienes permisos para asignar leads a este vendedor',
-            details: 'Solo puedes crear leads para ti mismo o para tu equipo directo'
-          });
+          return res.status(403).json({ error: 'No tenés permisos para asignar a este vendedor' });
         }
       }
-      
-      console.log(`✅ Lead asignado a vendedor ${finalAssignedTo} ${isFromBot ? '(BOT)' : '(manual validado)'}`);
-      
     } else {
       if (req.user.role === 'vendedor') {
         finalAssignedTo = req.user.id;
-        console.log(`🎯 Lead auto-asignado al vendedor ${finalAssignedTo} (creador)`);
-        
-      } else if (['supervisor', 'gerente'].includes(req.user.role)) {
-        try {
-          finalAssignedTo = await getAssignedVendorByBrand(marca);
-          
-          const hasPermission = await canAssignToVendor(req.user.id, req.user.role, finalAssignedTo);
-          if (!hasPermission) {
-            finalAssignedTo = req.user.id;
-            console.log(`⚠️ Round-robin asignó fuera del equipo, reasignando al creador ${finalAssignedTo}`);
-          } else {
-            console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${finalAssignedTo}`);
-          }
-        } catch (assignError) {
-          console.error('❌ Error en asignación automática:', assignError);
-          finalAssignedTo = req.user.id;
-        }
-        
       } else {
         try {
           finalAssignedTo = await getAssignedVendorByBrand(marca);
-          console.log(`🎯 Lead auto-asignado por round-robin al vendedor ${finalAssignedTo}`);
         } catch (assignError) {
-          console.error('❌ Error en asignación automática:', assignError);
-          return res.status(500).json({ 
-            error: 'Error al asignar vendedor automáticamente',
-            details: assignError.message 
-          });
+          console.error('Error en asignación:', assignError);
+          return res.status(500).json({ error: 'Error al asignar vendedor' });
         }
       }
     }
 
-    console.log('📝 Creando lead con datos:', {
-      nombre, telefono, modelo, marca, formaPago, estado, 
-      fuente, assigned_to: finalAssignedTo, created_by: req.user.id, 
-      creator_role: req.user.role,
-      from_bot: fuente && (fuente.includes('whatsapp') || fuente.includes('bot'))
-    });
-
-    const [result] = await pool.execute(
-      `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, infoUsado, entrega, fecha, created_at, created_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
-      [nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, finalAssignedTo, infoUsado, entrega, fecha, req.user.id]
-    );
-
-    const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    // ============================================
+    // SISTEMA DE ACEPTACIÓN
+    // ============================================
+    const shouldRequireAcceptance = isWorkingHours() && !isFromBot;
     
-    console.log('✅ Lead creado exitosamente, ID:', result.insertId, 'Asignado a:', finalAssignedTo);
+    let pendingAcceptance = false;
+    let acceptanceExpiresAt = null;
+    let currentOfferTo = null;
+    let assignedTo = finalAssignedTo;
+
+    if (shouldRequireAcceptance && finalAssignedTo) {
+      // En horario laboral: requiere aceptación
+      pendingAcceptance = true;
+      acceptanceExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
+      currentOfferTo = finalAssignedTo;
+      assignedTo = null; // No asignar hasta que acepte
+      
+      console.log(`🕐 Lead requiere aceptación, ofrecido a ${finalAssignedTo}`);
+    } else {
+      // Fuera de horario o es bot: asignación directa
+      console.log(`📅 Asignación directa (${!isWorkingHours() ? 'fuera de horario' : 'bot'})`);
+    }
+
+    // Crear el lead
+    const [result] = await pool.execute(`
+      INSERT INTO leads (
+        nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, 
+        assigned_to, infoUsado, entrega, fecha, created_at, created_by,
+        pending_acceptance, acceptance_expires_at, current_offer_to, assigned_at
+      ) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ${assignedTo ? 'NOW()' : 'NULL'})
+    `, [
+      nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, 
+      assignedTo, infoUsado, entrega, fecha, req.user.id,
+      pendingAcceptance, acceptanceExpiresAt, currentOfferTo
+    ]);
+
+    const leadId = result.insertId;
+    const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [leadId]);
+    const lead = rows[0];
+
+    // ============================================
+    // ENVIAR NOTIFICACIÓN SI REQUIERE ACEPTACIÓN
+    // ============================================
+    if (pendingAcceptance && io && currentOfferTo) {
+      // Notificación al vendedor
+      const sockets = require('../socket-server');
+      if (sockets && sockets.emitToUser) {
+        sockets.emitToUser(io, currentOfferTo, 'lead:offer', {
+          leadId: lead.id,
+          expiresAt: acceptanceExpiresAt.toISOString(),
+          timeoutMinutes: 10,
+          message: '🔔 NUEVO LEAD DISPONIBLE',
+          timestamp: new Date().toISOString()
+        });
+
+        sockets.emitToUser(io, currentOfferTo, 'notification', {
+          type: 'lead_offer',
+          title: '🔔 NUEVO LEAD DISPONIBLE',
+          message: 'Tenés 10 minutos para aceptar',
+          leadId: lead.id,
+          expiresAt: acceptanceExpiresAt.toISOString(),
+          requiresAction: true,
+          sound: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
     
-    res.json({ ok: true, lead: mapLead(rows[0]) });
+    console.log('✅ Lead creado:', leadId, pendingAcceptance ? '(pendiente aceptación)' : '(asignado directo)');
+    
+    res.json({ ok: true, lead: mapLead(lead) });
   } catch (error) {
     console.error('❌ Error POST /leads:', error);
-    console.error('❌ Body recibido:', req.body);
-    console.error('❌ Usuario:', req.user);
-    
-    res.status(500).json({ 
-      error: 'Error al crear lead',
-      message: error.message,
-      sqlMessage: error.sqlMessage || null,
-      code: error.code || null
-    });
+    res.status(500).json({ error: 'Error al crear lead', message: error.message });
   }
 });
 
-// PUT actualizar lead (incluye reasignación) - CON VALIDACIÓN DE ESTADOS PROTEGIDOS
+// ============================================
+// POST Aceptar lead
+// ============================================
+router.post('/:id/accept', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const io = req.app.get('io');
+
+    const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+
+    const lead = rows[0];
+
+    // Verificar que el lead está ofrecido a este usuario
+    if (lead.current_offer_to !== userId) {
+      return res.status(403).json({ error: 'Este lead no está disponible para vos' });
+    }
+
+    // Verificar que no expiró
+    if (lead.acceptance_expires_at && new Date(lead.acceptance_expires_at) < new Date()) {
+      return res.status(400).json({ error: 'La oferta expiró' });
+    }
+
+    // Aceptar el lead
+    await pool.execute(`
+      UPDATE leads 
+      SET pending_acceptance = FALSE,
+          current_offer_to = NULL,
+          acceptance_expires_at = NULL,
+          assigned_to = ?,
+          accepted_at = NOW()
+      WHERE id = ?
+    `, [userId, id]);
+
+    // Registrar en log
+    try {
+      await pool.execute(`
+        INSERT INTO lead_acceptance_log (lead_id, user_id, action)
+        VALUES (?, ?, 'accepted')
+      `, [id, userId]);
+    } catch (e) {
+      // Ignorar si la tabla no existe
+    }
+
+    const [updatedRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    const updatedLead = updatedRows[0];
+
+    // Notificar a todos
+    if (io) {
+      io.emit('lead:assigned', {
+        lead: updatedLead,
+        vendedorId: userId,
+        timestamp: new Date().toISOString()
+      });
+      io.emit('lead:changed', updatedLead);
+    }
+
+    console.log(`✅ Lead ${id} aceptado por vendedor ${userId}`);
+
+    res.json({ 
+      ok: true, 
+      lead: mapLead(updatedLead),
+      message: '✅ Lead aceptado! Ya podés ver los datos del cliente.'
+    });
+
+  } catch (error) {
+    console.error('Error aceptando lead:', error);
+    res.status(500).json({ error: 'Error al aceptar lead' });
+  }
+});
+
+// ============================================
+// POST Rechazar lead
+// ============================================
+router.post('/:id/reject', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const io = req.app.get('io');
+
+    const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+
+    const lead = rows[0];
+
+    if (lead.current_offer_to !== userId) {
+      return res.status(403).json({ error: 'Este lead no está disponible para vos' });
+    }
+
+    // Registrar rechazo
+    try {
+      await pool.execute(`
+        INSERT INTO lead_acceptance_log (lead_id, user_id, action)
+        VALUES (?, ?, 'rejected')
+      `, [id, userId]);
+    } catch (e) {
+      // Ignorar
+    }
+
+    // Obtener intentos anteriores
+    let attempts = [];
+    try {
+      attempts = lead.acceptance_attempts ? JSON.parse(lead.acceptance_attempts) : [];
+    } catch (e) {
+      attempts = [];
+    }
+    
+    if (!attempts.includes(userId)) {
+      attempts.push(userId);
+    }
+
+    // Buscar siguiente vendedor del equipo
+    const [[currentUser]] = await pool.execute(
+      'SELECT reportsTo FROM users WHERE id = ?',
+      [userId]
+    );
+
+    const supervisorId = currentUser?.reportsTo;
+    
+    let teamVendors = [];
+    if (supervisorId) {
+      const [vendors] = await pool.execute(`
+        SELECT id, name FROM users 
+        WHERE role = 'vendedor' AND active = TRUE AND reportsTo = ?
+        ORDER BY id
+      `, [supervisorId]);
+      teamVendors = vendors;
+    }
+
+    if (teamVendors.length === 0) {
+      const [vendors] = await pool.execute(`
+        SELECT id, name FROM users 
+        WHERE role = 'vendedor' AND active = TRUE
+        ORDER BY id
+      `);
+      teamVendors = vendors;
+    }
+
+    const availableVendors = teamVendors.filter(v => !attempts.includes(v.id));
+    
+    let nextVendor = null;
+    if (availableVendors.length > 0) {
+      nextVendor = availableVendors[0];
+    } else if (teamVendors.length > 0) {
+      // Todos rechazaron, volver al primero
+      attempts = [];
+      nextVendor = teamVendors[0];
+    }
+
+    if (nextVendor) {
+      const newExpires = new Date(Date.now() + 10 * 60 * 1000);
+      
+      await pool.execute(`
+        UPDATE leads 
+        SET acceptance_attempts = ?,
+            current_offer_to = ?,
+            acceptance_expires_at = ?
+        WHERE id = ?
+      `, [JSON.stringify(attempts), nextVendor.id, newExpires, id]);
+
+      // Notificar al siguiente vendedor
+      if (io) {
+        const sockets = require('../socket-server');
+        if (sockets && sockets.emitToUser) {
+          sockets.emitToUser(io, nextVendor.id, 'lead:offer', {
+            leadId: lead.id,
+            expiresAt: newExpires.toISOString(),
+            timeoutMinutes: 10,
+            message: '🔔 NUEVO LEAD DISPONIBLE',
+            timestamp: new Date().toISOString()
+          });
+
+          sockets.emitToUser(io, nextVendor.id, 'notification', {
+            type: 'lead_offer',
+            title: '🔔 NUEVO LEAD DISPONIBLE',
+            message: 'Tenés 10 minutos para aceptar',
+            leadId: lead.id,
+            requiresAction: true,
+            sound: true,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      console.log(`➡️ Lead ${id} pasado a vendedor ${nextVendor.id}`);
+    }
+
+    res.json({ ok: true, message: 'Lead rechazado, pasando al siguiente vendedor' });
+
+  } catch (error) {
+    console.error('Error rechazando lead:', error);
+    res.status(500).json({ error: 'Error al rechazar lead' });
+  }
+});
+
+// ============================================
+// GET Ofertas pendientes para el usuario actual
+// ============================================
+router.get('/pending-offers/me', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [rows] = await pool.execute(`
+      SELECT id, acceptance_expires_at 
+      FROM leads 
+      WHERE current_offer_to = ? 
+        AND pending_acceptance = TRUE
+        AND acceptance_expires_at > NOW()
+    `, [userId]);
+
+    res.json({ 
+      ok: true, 
+      offers: rows.map(r => ({
+        leadId: r.id,
+        expiresAt: r.acceptance_expires_at
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Error al obtener ofertas' });
+  }
+});
+
+// PUT actualizar lead
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
 
-    // ============================================
-    // OBTENER LEAD ACTUAL PARA VALIDAR ESTADO
-    // ============================================
     const [currentLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
     
     if (currentLead.length === 0) {
@@ -371,15 +658,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
     
     const leadActual = currentLead[0];
 
-    // ============================================
-    // VALIDAR CAMBIO DE ESTADO PROTEGIDO
-    // ============================================
+    // Validar estados protegidos
     if (updates.estado && updates.estado !== leadActual.estado) {
       const validacion = validarCambioEstadoLead(
         leadActual.estado, 
         updates.estado, 
         req.user.role,
-        false // No es automático, es cambio manual
+        false
       );
       
       if (!validacion.permitido) {
@@ -387,11 +672,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
       }
     }
 
-    // Si el lead está en estado protegido y se intenta cambiar cualquier cosa (no solo estado)
-    // Solo el owner puede modificarlo
     if (ESTADOS_PROTEGIDOS.includes(leadActual.estado) && req.user.role !== 'owner') {
       return res.status(403).json({ 
-        error: `Este lead está en estado "${leadActual.estado}" y no puede ser modificado. Solo el Owner puede cambiarlo.`
+        error: `Este lead está en estado "${leadActual.estado}" y no puede ser modificado.`
       });
     }
 
@@ -400,20 +683,17 @@ router.put('/:id', authenticateToken, async (req, res) => {
       'fuente', 'notas', 'assigned_to', 'vendedor', 'infoUsado', 'entrega', 'fecha'
     ];
 
-    // 🔥 Si se está asignando marca y NO viene vendedor, asignar automáticamente
     if (updates.marca && !updates.vendedor && !updates.assigned_to) {
       try {
         const autoVendor = await getAssignedVendorByBrand(updates.marca);
         if (autoVendor) {
           updates.assigned_to = autoVendor;
-          console.log(`🎯 Lead ${id}: marca ${updates.marca} asignada, vendedor auto-asignado: ${autoVendor}`);
         }
       } catch (error) {
-        console.error('⚠️ Error en auto-asignación:', error);
+        console.error('Error en auto-asignación:', error);
       }
     }
 
-    // Si viene 'vendedor' o 'assigned_to', validar permisos jerárquicos
     if (Object.prototype.hasOwnProperty.call(updates, 'vendedor') || 
         Object.prototype.hasOwnProperty.call(updates, 'assigned_to')) {
       
@@ -423,10 +703,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
         const hasPermission = await canAssignToVendor(req.user.id, req.user.role, newVendorId);
         
         if (!hasPermission) {
-          return res.status(403).json({ 
-            error: 'No tienes permisos para asignar leads a este vendedor',
-            details: 'Solo puedes asignar leads a ti mismo o a tu equipo directo'
-          });
+          return res.status(403).json({ error: 'No tenés permisos para asignar a este vendedor' });
         }
       }
     }
@@ -437,7 +714,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
     for (const [key, value] of Object.entries(updates)) {
       if (!allowedFields.includes(key)) continue;
 
-      // Validar marca si se actualiza
       if (key === 'marca' && !['vw', 'fiat', 'peugeot', 'renault'].includes(value)) {
         return res.status(400).json({ error: 'Marca inválida' });
       }
@@ -466,19 +742,14 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// 🔓 REACTIVAR LEAD (Solo Owner)
-// ============================================
+// POST reactivar lead (solo owner)
 router.post('/:id/reactivar', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { role } = req.user;
   const { nuevo_estado, motivo } = req.body;
   
-  // Solo owner puede reactivar
   if (role !== 'owner') {
-    return res.status(403).json({ 
-      error: 'Solo el Owner puede reactivar leads rechazados' 
-    });
+    return res.status(403).json({ error: 'Solo el Owner puede reactivar leads rechazados' });
   }
   
   try {
@@ -490,28 +761,20 @@ router.post('/:id/reactivar', authenticateToken, async (req, res) => {
     
     const lead = leads[0];
     
-    // Verificar que está en estado protegido
     if (!ESTADOS_PROTEGIDOS.includes(lead.estado)) {
-      return res.status(400).json({ 
-        error: 'Este lead no está en estado rechazado' 
-      });
+      return res.status(400).json({ error: 'Este lead no está en estado rechazado' });
     }
     
     if (!nuevo_estado) {
-      return res.status(400).json({ 
-        error: 'Debe especificar el nuevo estado para el lead' 
-      });
+      return res.status(400).json({ error: 'Debe especificar el nuevo estado' });
     }
     
-    // No permitir reactivar a otro estado protegido
     if (ESTADOS_PROTEGIDOS.includes(nuevo_estado)) {
-      return res.status(400).json({ 
-        error: 'No se puede reactivar a un estado de rechazo' 
-      });
+      return res.status(400).json({ error: 'No se puede reactivar a un estado de rechazo' });
     }
     
     const timestamp = new Date().toISOString();
-    const notaReactivacion = `\n[${timestamp}] REACTIVADO por Owner desde "${lead.estado}": ${motivo || 'Sin motivo especificado'}`;
+    const notaReactivacion = `\n[${timestamp}] REACTIVADO por Owner desde "${lead.estado}": ${motivo || 'Sin motivo'}`;
     
     await pool.execute(`
       UPDATE leads 
@@ -523,11 +786,9 @@ router.post('/:id/reactivar', authenticateToken, async (req, res) => {
     
     const [leadActualizado] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
     
-    console.log(`🔓 Lead ${id} reactivado por Owner: ${lead.estado} → ${nuevo_estado}`);
-    
     res.json({ 
       ok: true, 
-      mensaje: `Lead reactivado correctamente a estado "${nuevo_estado}"`,
+      mensaje: `Lead reactivado a "${nuevo_estado}"`,
       lead: mapLead(leadActualizado[0])
     });
     
@@ -540,15 +801,12 @@ router.post('/:id/reactivar', authenticateToken, async (req, res) => {
 // DELETE eliminar lead
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    // ============================================
-    // VALIDAR QUE NO SEA ESTADO PROTEGIDO (excepto owner)
-    // ============================================
     const [currentLead] = await pool.execute('SELECT estado FROM leads WHERE id = ?', [req.params.id]);
     
     if (currentLead.length > 0 && ESTADOS_PROTEGIDOS.includes(currentLead[0].estado)) {
       if (req.user.role !== 'owner') {
         return res.status(403).json({ 
-          error: `No se puede eliminar un lead en estado "${currentLead[0].estado}". Solo el Owner puede hacerlo.`
+          error: `No se puede eliminar un lead en estado "${currentLead[0].estado}".`
         });
       }
     }

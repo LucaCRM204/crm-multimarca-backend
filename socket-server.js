@@ -1,25 +1,46 @@
 /**
  * ============================================
- * SOCKET SERVER - TIEMPO REAL PARA CRM (MySQL)
+ * SOCKET SERVER v2 - SISTEMA DE ACEPTACIÓN
  * ============================================
- * Adaptado para tu schema con:
- * - assigned_to (no vendedor)
- * - MySQL con mysql2/promise
- * 
- * NOTA: Reasignación automática DESHABILITADA
+ * NUEVO FLUJO:
+ * - Lead nuevo → Vendedor recibe oferta (no ve datos)
+ * - 10 min para aceptar → Si no acepta, pasa al siguiente
+ * - Solo en horario laboral (9:30 - 19:30)
+ * - Si todos rechazan, vuelve al primero
  */
 
 const { Server } = require('socket.io');
 
-// Almacenamiento en memoria (en producción podrías usar Redis)
-const connectedUsers = new Map(); // Map<socketId, { userId, userName, role, connectedAt }>
-const userSessions = new Map();   // Map<userId, Set<socketId>> - un usuario puede tener múltiples tabs
-const activityLog = [];           // Array de registros de actividad
+// Almacenamiento en memoria
+const connectedUsers = new Map();
+const userSessions = new Map();
+const activityLog = [];
+
+// Configuración
+const ACCEPTANCE_TIMEOUT_MINUTES = 10;
+const WORK_HOURS = {
+  start: { hour: 9, minute: 30 },
+  end: { hour: 19, minute: 30 }
+};
+
+/**
+ * Verifica si estamos en horario laboral
+ */
+function isWorkingHours() {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = WORK_HOURS.start.hour * 60 + WORK_HOURS.start.minute;
+  const endMinutes = WORK_HOURS.end.hour * 60 + WORK_HOURS.end.minute;
+  
+  // También verificar que sea día de semana (1-5 = Lun-Vie)
+  const dayOfWeek = now.getDay();
+  const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+  
+  return isWeekday && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
 
 /**
  * Inicializa el servidor de WebSockets
- * @param {http.Server} httpServer - Servidor HTTP de Express
- * @param {Pool} pool - Pool de conexiones MySQL (tu db.js)
  */
 function initSocketServer(httpServer, pool) {
   const io = new Server(httpServer, {
@@ -40,7 +61,6 @@ function initSocketServer(httpServer, pool) {
         return next(new Error('Autenticación requerida'));
       }
       
-      // Verificar token JWT
       const jwt = require('jsonwebtoken');
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
@@ -59,61 +79,35 @@ function initSocketServer(httpServer, pool) {
     const { userId, userName, userRole } = socket;
     console.log(`✅ Usuario conectado: ${userName} (ID: ${userId}, Role: ${userRole})`);
 
-    // Registrar conexión
     handleUserConnect(socket, io, pool);
 
     // ===== EVENTOS DE LEADS =====
     
-    // Cuando se crea un nuevo lead
     socket.on('lead:created', (lead) => {
       console.log(`📥 Nuevo lead creado: ${lead.nombre}`);
       socket.broadcast.emit('lead:new', lead);
-      
-      // Si el lead tiene vendedor asignado, notificarle
-      if (lead.assigned_to) {
-        emitToUser(io, lead.assigned_to, 'notification', {
-          type: 'lead_assigned',
-          title: '🎯 Nuevo Lead Asignado',
-          message: `Se te ha asignado el lead: ${lead.nombre}`,
-          leadId: lead.id,
-          timestamp: new Date().toISOString()
-        });
-      }
     });
 
-    // Cuando se actualiza un lead
     socket.on('lead:updated', (lead) => {
       console.log(`📝 Lead actualizado: ${lead.nombre} (ID: ${lead.id})`);
       socket.broadcast.emit('lead:changed', lead);
     });
 
-    // Cuando se elimina un lead
     socket.on('lead:deleted', (leadId) => {
       console.log(`🗑️ Lead eliminado: ID ${leadId}`);
       socket.broadcast.emit('lead:removed', leadId);
     });
 
-    // Cuando un vendedor acepta un lead
-    socket.on('lead:accepted', async ({ leadId, odUserId }) => {
-      console.log(`✅ Lead ${leadId} aceptado por usuario ${odUserId}`);
-      
-      // Actualizar en la BD
-      try {
-        await pool.execute(`
-          UPDATE leads 
-          SET accepted_at = NOW(),
-              response_time_minutes = TIMESTAMPDIFF(MINUTE, assigned_at, NOW())
-          WHERE id = ?
-        `, [leadId]);
-      } catch (err) {
-        console.error('Error actualizando accepted_at:', err);
-      }
-      
-      // Notificar a todos
-      io.emit('lead:accepted', { leadId, odUserId, acceptedAt: new Date().toISOString() });
-      
-      // Registrar actividad
-      logActivity(odUserId, 'lead_accepted', { leadId });
+    // ===== NUEVO: ACEPTAR LEAD =====
+    socket.on('lead:accept', async ({ leadId }) => {
+      console.log(`✅ Usuario ${userId} aceptó lead ${leadId}`);
+      await handleLeadAcceptance(io, pool, leadId, userId, 'accepted');
+    });
+
+    // ===== NUEVO: RECHAZAR LEAD =====
+    socket.on('lead:reject', async ({ leadId }) => {
+      console.log(`❌ Usuario ${userId} rechazó lead ${leadId}`);
+      await handleLeadAcceptance(io, pool, leadId, userId, 'rejected');
     });
 
     // ===== EVENTOS DE PRESENCIA =====
@@ -148,10 +142,322 @@ function initSocketServer(httpServer, pool) {
     });
   });
 
-  // NOTA: Reasignación automática DESHABILITADA
-  // startReassignmentChecker(io, pool);
+  // Iniciar el checker de timeouts de aceptación
+  startAcceptanceChecker(io, pool);
 
   return io;
+}
+
+// ============================================
+// SISTEMA DE ACEPTACIÓN DE LEADS
+// ============================================
+
+/**
+ * Ofrece un lead a un vendedor específico
+ */
+async function offerLeadToVendor(io, pool, lead, vendorId) {
+  const expiresAt = new Date(Date.now() + ACCEPTANCE_TIMEOUT_MINUTES * 60 * 1000);
+  
+  // Actualizar lead con la oferta
+  await pool.execute(`
+    UPDATE leads 
+    SET pending_acceptance = TRUE,
+        current_offer_to = ?,
+        acceptance_expires_at = ?
+    WHERE id = ?
+  `, [vendorId, expiresAt, lead.id]);
+
+  // Registrar en log
+  try {
+    await pool.execute(`
+      INSERT INTO lead_acceptance_log (lead_id, user_id, action)
+      VALUES (?, ?, 'offered')
+    `, [lead.id, vendorId]);
+  } catch (e) {
+    console.log('lead_acceptance_log table might not exist yet');
+  }
+
+  // Enviar notificación al vendedor
+  emitToUser(io, vendorId, 'lead:offer', {
+    leadId: lead.id,
+    expiresAt: expiresAt.toISOString(),
+    timeoutMinutes: ACCEPTANCE_TIMEOUT_MINUTES,
+    message: '🔔 NUEVO LEAD DISPONIBLE',
+    timestamp: new Date().toISOString()
+  });
+
+  // También enviar notificación push
+  emitToUser(io, vendorId, 'notification', {
+    type: 'lead_offer',
+    title: '🔔 NUEVO LEAD DISPONIBLE',
+    message: `Tenés ${ACCEPTANCE_TIMEOUT_MINUTES} minutos para aceptar`,
+    leadId: lead.id,
+    expiresAt: expiresAt.toISOString(),
+    requiresAction: true,
+    sound: true,
+    timestamp: new Date().toISOString()
+  });
+
+  console.log(`📨 Lead ${lead.id} ofrecido a vendedor ${vendorId}, expira en ${ACCEPTANCE_TIMEOUT_MINUTES} min`);
+}
+
+/**
+ * Maneja la aceptación o rechazo de un lead
+ */
+async function handleLeadAcceptance(io, pool, leadId, userId, action) {
+  try {
+    // Obtener el lead
+    const [[lead]] = await pool.execute('SELECT * FROM leads WHERE id = ?', [leadId]);
+    
+    if (!lead) {
+      console.log(`Lead ${leadId} no encontrado`);
+      return;
+    }
+
+    // Verificar que el lead estaba ofrecido a este usuario
+    if (lead.current_offer_to !== userId) {
+      console.log(`Lead ${leadId} no estaba ofrecido al usuario ${userId}`);
+      emitToUser(io, userId, 'lead:offer_expired', {
+        leadId,
+        message: 'Esta oferta ya no está disponible'
+      });
+      return;
+    }
+
+    // Registrar la acción
+    try {
+      await pool.execute(`
+        INSERT INTO lead_acceptance_log (lead_id, user_id, action)
+        VALUES (?, ?, ?)
+      `, [leadId, userId, action]);
+    } catch (e) {
+      // Ignorar si la tabla no existe
+    }
+
+    if (action === 'accepted') {
+      // ✅ Lead aceptado - asignar al vendedor
+      await pool.execute(`
+        UPDATE leads 
+        SET pending_acceptance = FALSE,
+            current_offer_to = NULL,
+            acceptance_expires_at = NULL,
+            assigned_to = ?,
+            accepted_at = NOW(),
+            estado = 'nuevo'
+        WHERE id = ?
+      `, [userId, leadId]);
+
+      // Notificar al vendedor que ahora puede ver el lead
+      emitToUser(io, userId, 'lead:accepted_success', {
+        leadId,
+        message: '✅ Lead aceptado! Ya podés ver los datos del cliente.'
+      });
+
+      // Notificar a todos que el lead fue asignado
+      const [[updatedLead]] = await pool.execute(`
+        SELECT l.*, u.name as vendedor_nombre
+        FROM leads l
+        LEFT JOIN users u ON l.assigned_to = u.id
+        WHERE l.id = ?
+      `, [leadId]);
+
+      io.emit('lead:assigned', {
+        lead: updatedLead,
+        vendedorId: userId,
+        timestamp: new Date().toISOString()
+      });
+
+      io.emit('lead:changed', updatedLead);
+
+      console.log(`✅ Lead ${leadId} aceptado por vendedor ${userId}`);
+
+    } else {
+      // ❌ Lead rechazado - pasar al siguiente vendedor
+      await passLeadToNextVendor(io, pool, lead, userId);
+    }
+
+  } catch (error) {
+    console.error('Error en handleLeadAcceptance:', error);
+  }
+}
+
+/**
+ * Pasa el lead al siguiente vendedor del equipo
+ */
+async function passLeadToNextVendor(io, pool, lead, currentUserId) {
+  try {
+    // Obtener intentos anteriores
+    let attempts = [];
+    try {
+      attempts = lead.acceptance_attempts ? JSON.parse(lead.acceptance_attempts) : [];
+    } catch (e) {
+      attempts = [];
+    }
+    
+    // Agregar el usuario actual a los intentos
+    if (!attempts.includes(currentUserId)) {
+      attempts.push(currentUserId);
+    }
+
+    // Obtener el supervisor del vendedor actual
+    const [[currentUser]] = await pool.execute(
+      'SELECT reportsTo FROM users WHERE id = ?',
+      [currentUserId]
+    );
+
+    const supervisorId = currentUser?.reportsTo;
+
+    // Buscar el siguiente vendedor del mismo equipo
+    let teamVendors = [];
+    if (supervisorId) {
+      const [vendors] = await pool.execute(`
+        SELECT id, name 
+        FROM users 
+        WHERE role = 'vendedor' 
+          AND active = TRUE
+          AND reportsTo = ?
+        ORDER BY id
+      `, [supervisorId]);
+      teamVendors = vendors;
+    }
+
+    // Si no hay vendedores en el equipo, buscar cualquier vendedor activo
+    if (teamVendors.length === 0) {
+      const [vendors] = await pool.execute(`
+        SELECT id, name 
+        FROM users 
+        WHERE role = 'vendedor' 
+          AND active = TRUE
+        ORDER BY id
+      `);
+      teamVendors = vendors;
+    }
+
+    // Filtrar vendedores que ya rechazaron
+    const availableVendors = teamVendors.filter(v => !attempts.includes(v.id));
+
+    let nextVendor = null;
+
+    if (availableVendors.length > 0) {
+      // Hay vendedores que aún no recibieron la oferta
+      nextVendor = availableVendors[0];
+    } else if (teamVendors.length > 0) {
+      // Todos rechazaron, volver al primero
+      console.log(`🔄 Todos los vendedores rechazaron lead ${lead.id}, volviendo al primero`);
+      attempts = []; // Reset attempts
+      nextVendor = teamVendors[0];
+    }
+
+    if (nextVendor) {
+      // Actualizar attempts en el lead
+      await pool.execute(`
+        UPDATE leads 
+        SET acceptance_attempts = ?,
+            current_offer_to = NULL,
+            acceptance_expires_at = NULL
+        WHERE id = ?
+      `, [JSON.stringify(attempts), lead.id]);
+
+      // Ofrecer al siguiente vendedor
+      const [[updatedLead]] = await pool.execute('SELECT * FROM leads WHERE id = ?', [lead.id]);
+      await offerLeadToVendor(io, pool, updatedLead, nextVendor.id);
+
+      console.log(`➡️ Lead ${lead.id} pasado a vendedor ${nextVendor.id} (${nextVendor.name})`);
+    } else {
+      // No hay vendedores disponibles
+      console.log(`⚠️ No hay vendedores disponibles para lead ${lead.id}`);
+      
+      // Asignar directo al primero que se encuentre
+      const [[anyVendor]] = await pool.execute(`
+        SELECT id FROM users WHERE role = 'vendedor' AND active = TRUE LIMIT 1
+      `);
+      
+      if (anyVendor) {
+        await pool.execute(`
+          UPDATE leads 
+          SET pending_acceptance = FALSE,
+              current_offer_to = NULL,
+              acceptance_expires_at = NULL,
+              assigned_to = ?
+          WHERE id = ?
+        `, [anyVendor.id, lead.id]);
+      }
+    }
+
+  } catch (error) {
+    console.error('Error en passLeadToNextVendor:', error);
+  }
+}
+
+/**
+ * Checker que corre cada 30 segundos para verificar timeouts
+ */
+function startAcceptanceChecker(io, pool) {
+  console.log(`⏰ Checker de aceptación iniciado (timeout: ${ACCEPTANCE_TIMEOUT_MINUTES} min)`);
+  
+  setInterval(async () => {
+    if (!pool) return;
+    
+    try {
+      // Buscar leads con ofertas expiradas
+      const [expiredOffers] = await pool.execute(`
+        SELECT l.*, u.name as current_vendor_name
+        FROM leads l
+        LEFT JOIN users u ON l.current_offer_to = u.id
+        WHERE l.pending_acceptance = TRUE
+          AND l.acceptance_expires_at IS NOT NULL
+          AND l.acceptance_expires_at < NOW()
+      `);
+
+      for (const lead of expiredOffers) {
+        console.log(`⏰ Timeout para lead ${lead.id} (ofrecido a ${lead.current_vendor_name})`);
+        
+        // Registrar timeout
+        try {
+          await pool.execute(`
+            INSERT INTO lead_acceptance_log (lead_id, user_id, action)
+            VALUES (?, ?, 'timeout')
+          `, [lead.id, lead.current_offer_to]);
+        } catch (e) {
+          // Ignorar
+        }
+
+        // Notificar al vendedor que perdió la oportunidad
+        emitToUser(io, lead.current_offer_to, 'lead:offer_expired', {
+          leadId: lead.id,
+          message: '⏰ Se acabó el tiempo para aceptar este lead'
+        });
+
+        // Pasar al siguiente vendedor
+        await passLeadToNextVendor(io, pool, lead, lead.current_offer_to);
+      }
+    } catch (err) {
+      // Silenciar errores si las columnas no existen aún
+      if (!err.message.includes('Unknown column')) {
+        console.error('Error en acceptance checker:', err);
+      }
+    }
+  }, 30000); // Cada 30 segundos
+}
+
+// ============================================
+// FUNCIÓN PARA INICIAR OFERTA DE LEAD
+// ============================================
+
+/**
+ * Inicia el proceso de oferta para un lead nuevo
+ * Llamar desde leads.js cuando se crea un lead
+ */
+async function initiateLeadOffer(io, pool, lead, vendorId) {
+  // Solo en horario laboral
+  if (!isWorkingHours()) {
+    console.log(`📅 Fuera de horario laboral, lead ${lead.id} asignado directamente`);
+    return false; // Indica que se debe asignar directo
+  }
+
+  // Iniciar oferta
+  await offerLeadToVendor(io, pool, lead, vendorId);
+  return true; // Indica que se inició el proceso de aceptación
 }
 
 // ============================================
@@ -162,7 +468,6 @@ async function handleUserConnect(socket, io, pool) {
   const { userId, userName, userRole } = socket;
   const now = new Date();
 
-  // Registrar en el mapa de usuarios conectados
   connectedUsers.set(socket.id, {
     odUserId: userId,
     odUserName: userName,
@@ -172,19 +477,15 @@ async function handleUserConnect(socket, io, pool) {
     status: 'active'
   });
 
-  // Registrar sesión (un usuario puede tener múltiples tabs)
   if (!userSessions.has(userId)) {
     userSessions.set(userId, new Set());
   }
   userSessions.get(userId).add(socket.id);
 
-  // Registrar inicio de sesión en la BD para reportes
   await logSessionStart(pool, userId);
 
-  // Registrar actividad
   logActivity(userId, 'connected', { socketId: socket.id });
 
-  // Notificar a todos los demás que este usuario está online
   socket.broadcast.emit('presence:user_online', {
     odUserId: userId,
     odUserName: userName,
@@ -193,31 +494,51 @@ async function handleUserConnect(socket, io, pool) {
     connectedAt: now.toISOString()
   });
 
-  // Enviar al usuario que se conecta la lista de usuarios online
   socket.emit('presence:users_list', getOnlineUsers());
+
+  // Verificar si hay leads pendientes de aceptación para este usuario
+  if (pool) {
+    try {
+      const [[pendingOffer]] = await pool.execute(`
+        SELECT id, acceptance_expires_at 
+        FROM leads 
+        WHERE current_offer_to = ? 
+          AND pending_acceptance = TRUE
+          AND acceptance_expires_at > NOW()
+        LIMIT 1
+      `, [userId]);
+
+      if (pendingOffer) {
+        socket.emit('lead:offer', {
+          leadId: pendingOffer.id,
+          expiresAt: pendingOffer.acceptance_expires_at,
+          message: '🔔 NUEVO LEAD DISPONIBLE',
+          timeoutMinutes: ACCEPTANCE_TIMEOUT_MINUTES,
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (err) {
+      // Silenciar si las columnas no existen
+    }
+  }
 }
 
 async function handleUserDisconnect(socket, io, pool) {
   const { userId, userName } = socket;
   const userData = connectedUsers.get(socket.id);
 
-  // Remover socket del mapa
   connectedUsers.delete(socket.id);
 
-  // Remover de las sesiones del usuario
   if (userSessions.has(userId)) {
     userSessions.get(userId).delete(socket.id);
     
-    // Si no tiene más sesiones activas, está offline
     if (userSessions.get(userId).size === 0) {
       userSessions.delete(userId);
       
-      // Registrar fin de sesión para reportes
       if (userData) {
         await logSessionEnd(pool, userId, userData.connectedAt);
       }
 
-      // Notificar a todos que este usuario está offline
       io.emit('presence:user_offline', {
         odUserId: userId,
         odUserName: userName,
@@ -284,7 +605,6 @@ function logActivity(userId, action, data) {
     timestamp: new Date()
   });
 
-  // Limpiar logs viejos (mantener últimas 24 horas)
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   while (activityLog.length > 0 && activityLog[0].timestamp < oneDayAgo) {
     activityLog.shift();
@@ -300,7 +620,7 @@ async function logSessionStart(pool, userId) {
       VALUES (?, NOW(), CURDATE())
     `, [userId]);
   } catch (err) {
-    console.error('Error logging session start:', err);
+    // Ignorar si la tabla no existe
   }
 }
 
@@ -321,7 +641,7 @@ async function logSessionEnd(pool, userId, connectedAt) {
       LIMIT 1
     `, [durationMinutes, userId]);
   } catch (err) {
-    console.error('Error logging session end:', err);
+    // Ignorar
   }
 }
 
@@ -345,5 +665,8 @@ function emitToUser(io, userId, event, data) {
 module.exports = {
   initSocketServer,
   getOnlineUsers,
-  emitToUser
+  emitToUser,
+  initiateLeadOffer,
+  isWorkingHours,
+  ACCEPTANCE_TIMEOUT_MINUTES
 };
