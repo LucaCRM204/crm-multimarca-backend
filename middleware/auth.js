@@ -46,7 +46,7 @@ const authenticateToken = async (req, res, next) => {
             uid: user.id,
             email: user.email,
             name: user.name,
-            role: user.role,  // ROL ACTUALIZADO DE LA DB
+            role: user.role,
             active: user.active,
             reportsTo: user.reportsTo
           };
@@ -55,7 +55,6 @@ const authenticateToken = async (req, res, next) => {
         }
       } catch (dbError) {
         console.error('Error consultando usuario en DB:', dbError.message);
-        // Si falla la DB, usar datos del token como fallback
         req.user = decoded;
       }
     } else {
@@ -71,6 +70,7 @@ const authenticateToken = async (req, res, next) => {
 
 /**
  * Middleware para verificar roles
+ * @param {string[]} allowedRoles - Roles permitidos
  */
 const requireRole = (allowedRoles) => {
   return (req, res, next) => {
@@ -116,7 +116,8 @@ const requireOwnerOrRole = (allowedRoles) => {
 };
 
 /**
- * Middleware para verificar acceso a recursos propios o supervisores
+ * Middleware para verificar que el usuario accede a sus propios recursos
+ * o tiene rol de supervisor/gerente/etc
  */
 const requireSelfOrSupervisor = (req, res, next) => {
   if (!req.user) {
