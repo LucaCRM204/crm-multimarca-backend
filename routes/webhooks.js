@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const pool = require('../db');
 const { getAssignedVendorByBrand } = require('../utils/assign');
 const router = express.Router();
@@ -146,7 +146,15 @@ router.post('/lacomer', async (req, res) => {
     let marca     = cleanText(body.marca || 'vw').toLowerCase();
     let formaPago = cleanText(body.formaPago || 'Consultar');
     let notas     = cleanText(body.notas || '');
-    const fuente  = 'lacomer';
+    
+    // 🔥 CAMBIO: Ahora lee el campo 'fuente' del body, si no viene usa 'lacomer' por defecto
+    const fuente  = cleanText(body.fuente) || 'lacomer';
+    
+    // 🆕 Campos extra de la ruleta digital
+    const dni = cleanText(body.dni || '');
+    const email = cleanText(body.email || '');
+    const premio = cleanText(body.premio || '');
+    const codigoPremio = cleanText(body.codigoPremio || '');
     
     // 🆕 Nuevo: Recibir equipoId desde Zapier (puede venir como equipoId, teamId o equipo_id)
     const equipoId = body.equipoId || body.teamId || body.equipo_id;
@@ -204,11 +212,16 @@ router.post('/lacomer', async (req, res) => {
       [nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to]
     );
 
-    const logMsg = equipoId 
-      ? `✅ Lead La Comer creado: ID ${result.insertId}, equipo ${equipoId}, marca ${marca}, asignado a vendedor ${assigned_to}`
-      : `✅ Lead La Comer creado: ID ${result.insertId}, marca ${marca}, asignado a vendedor ${assigned_to} (sin equipo específico)`;
-    
+    // 🔥 Log mejorado para identificar origen
+    const logEmoji = fuente === 'ruleta_digital' ? '🎰' : '📥';
+    const logMsg = `${logEmoji} Lead ${fuente.toUpperCase()} creado: ID ${result.insertId}, marca ${marca}, asignado a vendedor ${assigned_to}`;
     console.log(logMsg);
+    
+    if (fuente === 'ruleta_digital' && codigoPremio) {
+      console.log(`   🎫 Código premio: ${codigoPremio}`);
+      console.log(`   🏆 Premio: ${premio}`);
+      console.log(`   🪪 DNI: ${dni}`);
+    }
 
     // Respuesta exitosa
     res.json({
@@ -216,7 +229,9 @@ router.post('/lacomer', async (req, res) => {
       leadId: result.insertId,
       assignedTo: assigned_to,
       marca: marca,
+      fuente: fuente,
       equipoId: equipoId || null,
+      codigoPremio: codigoPremio || null,
       message: 'Lead creado correctamente',
     });
 
