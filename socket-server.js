@@ -283,29 +283,37 @@ async function handleLeadAcceptance(io, pool, leadId, userId, action) {
 
 /**
  * Pasa el lead al siguiente vendedor del equipo
+ * FIX: Asegurar que attempts siempre sea un array
  */
 async function passLeadToNextVendor(io, pool, lead, currentUserId) {
   try {
-    // Obtener intentos anteriores
+    // Obtener intentos anteriores - FIX: asegurar que sea un array
     let attempts = [];
     try {
-      attempts = lead.acceptance_attempts ? JSON.parse(lead.acceptance_attempts) : [];
+      if (lead.acceptance_attempts) {
+        const parsed = JSON.parse(lead.acceptance_attempts);
+        // Asegurar que sea un array
+        attempts = Array.isArray(parsed) ? parsed : [];
+      }
     } catch (e) {
+      console.log('Error parseando acceptance_attempts, usando array vacío');
       attempts = [];
     }
     
-    // Agregar el usuario actual a los intentos
-    if (!attempts.includes(currentUserId)) {
+    // Agregar el usuario actual a los intentos (si existe y no está ya)
+    if (currentUserId && !attempts.includes(currentUserId)) {
       attempts.push(currentUserId);
     }
 
     // Obtener el supervisor del vendedor actual
-    const [[currentUser]] = await pool.execute(
-      'SELECT reportsTo FROM users WHERE id = ?',
-      [currentUserId]
-    );
-
-    const supervisorId = currentUser?.reportsTo;
+    let supervisorId = null;
+    if (currentUserId) {
+      const [[currentUser]] = await pool.execute(
+        'SELECT reportsTo FROM users WHERE id = ?',
+        [currentUserId]
+      );
+      supervisorId = currentUser?.reportsTo;
+    }
 
     // Buscar el siguiente vendedor del mismo equipo
     let teamVendors = [];
@@ -423,10 +431,12 @@ function startAcceptanceChecker(io, pool) {
         }
 
         // Notificar al vendedor que perdió la oportunidad
-        emitToUser(io, lead.current_offer_to, 'lead:offer_expired', {
-          leadId: lead.id,
-          message: '⏰ Se acabó el tiempo para aceptar este lead'
-        });
+        if (lead.current_offer_to) {
+          emitToUser(io, lead.current_offer_to, 'lead:offer_expired', {
+            leadId: lead.id,
+            message: '⏰ Se acabó el tiempo para aceptar este lead'
+          });
+        }
 
         // Pasar al siguiente vendedor
         await passLeadToNextVendor(io, pool, lead, lead.current_offer_to);
