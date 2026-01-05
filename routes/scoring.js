@@ -804,9 +804,10 @@ router.post('/:id/mensaje', authMiddleware, async (req, res) => {
     // Determinar el tipo de mensaje
     let tipoMensaje = tipo || 'sistema';
     if (ROLES_AUTORIZACION.includes(role)) {
-      tipoMensaje = tipo === 'resuelto' ? 'resuelto' : 'respuesta_supervisor';
+      tipoMensaje = tipo === 'resuelto' ? 'resuelto' : (tipo === 'correccion' ? 'correccion' : 'respuesta_supervisor');
     } else if (role === 'vendedor') {
-      tipoMensaje = 'respuesta_vendedor';
+      // Vendedor puede enviar corrección o respuesta normal
+      tipoMensaje = tipo === 'correccion' ? 'correccion' : 'respuesta_vendedor';
     } else if (ROLES_SCORING.includes(role)) {
       tipoMensaje = 'observacion';
     }
@@ -835,13 +836,24 @@ router.post('/:id/mensaje', authMiddleware, async (req, res) => {
     
     await crearNota(pool, id, userId, 'mensaje_interno', null, null, `[${timestamp}] ${userName}: ${mensaje}`);
     
-    // Si es mensaje de "resuelto", actualizar la venta y notificar a scoring
-    if (tipoMensaje === 'resuelto') {
-      await pool.query(`
-        UPDATE ventas_scoring 
-        SET resuelta_at = NOW(), resuelta_por = ?
-        WHERE id = ?
-      `, [userId, id]);
+    // Si es mensaje de "resuelto" o "correccion", actualizar la venta y notificar a scoring
+    if (tipoMensaje === 'resuelto' || tipoMensaje === 'correccion') {
+      // Cambiar estado a en_proceso si estaba observada
+      if (venta.estado === 'observada') {
+        await pool.query(`
+          UPDATE ventas_scoring 
+          SET estado = 'en_proceso', resuelta_at = NOW(), resuelta_por = ?
+          WHERE id = ?
+        `, [userId, id]);
+        
+        await crearNota(pool, id, userId, 'cambio_estado', 'observada', 'en_proceso', `Corrección enviada: ${mensaje}`);
+      } else {
+        await pool.query(`
+          UPDATE ventas_scoring 
+          SET resuelta_at = NOW(), resuelta_por = ?
+          WHERE id = ?
+        `, [userId, id]);
+      }
       
       // Crear alerta para el usuario de scoring
       if (venta.scoring_user_id) {
@@ -857,7 +869,7 @@ router.post('/:id/mensaje', authMiddleware, async (req, res) => {
           io.to(`user_${venta.scoring_user_id}`).emit('scoring:alerta', {
             tipo: 'observacion_resuelta',
             ventaId: id,
-            mensaje: `Observación resuelta: ${mensaje}`
+            mensaje: `Corrección enviada: ${mensaje}`
           });
         }
       }
