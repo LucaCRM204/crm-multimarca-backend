@@ -1,6 +1,6 @@
 /**
  * ============================================
- * SERVER.JS CON WEBSOCKETS + SCORING - CRM Alluma
+ * SERVER.JS CON WEBSOCKETS + SCORING + METAS - CRM Alluma
  * ============================================
  */
 const express = require('express');
@@ -23,7 +23,8 @@ const pool = require('./db');
 const authRouter = require('./routes/auth');
 const leadsRouter = require('./routes/leads');
 const activityRouter = require('./routes/activity');
-const scoringRouter = require('./routes/scoring'); // ← NUEVO: Scoring
+const scoringRouter = require('./routes/scoring');
+const metasRouter = require('./routes/metas'); // ← NUEVO: Metas
 
 let usersRouter;
 try { 
@@ -59,7 +60,7 @@ const corsOpts = {
 app.use(cors(corsOpts));
 app.options('*', cors(corsOpts));
 
-// ← NUEVO: Servir archivos estáticos (PDFs de scoring)
+// Servir archivos estáticos (PDFs de scoring)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Rutas principales
@@ -68,7 +69,8 @@ app.use('/api/leads', leadsRouter);
 app.use('/api/presupuestos', require('./routes/presupuestos'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/activity', activityRouter);
-app.use('/api/scoring', scoringRouter); // ← NUEVO: Rutas de scoring
+app.use('/api/scoring', scoringRouter);
+app.use('/api/metas', metasRouter(pool)); // ← NUEVO: Rutas de metas
 if (usersRouter) app.use('/api/users', usersRouter);
 
 // Health check
@@ -77,8 +79,8 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOS
 // Ruta raíz
 app.get('/', (_req, res) => res.json({ 
   message: 'Alluma CRM Backend API', 
-  version: '2.1.0',
-  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring']
+  version: '2.2.0',
+  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring', 'metas']
 }));
 
 // Inicializar WebSockets
@@ -91,5 +93,6 @@ server.listen(PORT, () => {
   console.log(`\n🚀 Backend escuchando en puerto ${PORT}`);
   console.log(`⚡ WebSockets habilitados`);
   console.log(`📊 Reportes de actividad disponibles`);
-  console.log(`📋 Módulo de Scoring activo\n`);
+  console.log(`📋 Módulo de Scoring activo`);
+  console.log(`🎯 Módulo de Metas activo\n`);
 });
