@@ -601,7 +601,7 @@ router.post('/:id/tomar', authMiddleware, async (req, res) => {
 // ============================================
 // 6. CAMBIAR ESTADO (Scoring/Cobranza) - CON MENSAJES EN OBSERVACIONES
 // ============================================
-router.post('/:id/estado', authMiddleware, async (req, res) => {
+router.put('/:id/estado', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const io = req.app.get('io');
   const { id } = req.params;
