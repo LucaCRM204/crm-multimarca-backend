@@ -338,7 +338,14 @@ router.post('/', authenticateToken, async (req, res) => {
     // ============================================
     // SISTEMA DE ACEPTACIÓN
     // ============================================
-    const shouldRequireAcceptance = isWorkingHours() && !isFromBot;
+    // Determinar si el vendedor está creando su propio lead
+    const isVendorCreatingOwnLead = req.user.role === 'vendedor' && finalAssignedTo === req.user.id;
+    
+    // No requiere aceptación si:
+    // - Es fuera de horario laboral
+    // - Es un lead del bot
+    // - El vendedor está creando su propio lead (auto-asignación)
+    const shouldRequireAcceptance = isWorkingHours() && !isFromBot && !isVendorCreatingOwnLead;
     
     let pendingAcceptance = false;
     let acceptanceExpiresAt = null;
@@ -346,7 +353,7 @@ router.post('/', authenticateToken, async (req, res) => {
     let assignedTo = finalAssignedTo;
 
     if (shouldRequireAcceptance && finalAssignedTo) {
-      // En horario laboral: requiere aceptación
+      // En horario laboral y lead asignado a OTRO vendedor: requiere aceptación
       pendingAcceptance = true;
       acceptanceExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
       currentOfferTo = finalAssignedTo;
@@ -354,8 +361,9 @@ router.post('/', authenticateToken, async (req, res) => {
       
       console.log(`🕐 Lead requiere aceptación, ofrecido a ${finalAssignedTo}`);
     } else {
-      // Fuera de horario o es bot: asignación directa
-      console.log(`📅 Asignación directa (${!isWorkingHours() ? 'fuera de horario' : 'bot'})`);
+      // Asignación directa: fuera de horario, bot, o vendedor creando su propio lead
+      const reason = !isWorkingHours() ? 'fuera de horario' : isFromBot ? 'bot' : 'vendedor creó su propio lead';
+      console.log(`📅 Asignación directa (${reason})`);
     }
 
     // Crear el lead
