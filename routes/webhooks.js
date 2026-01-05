@@ -5,6 +5,12 @@ const router = express.Router();
 
 // ========= Índices Round Robin para Sheets =========
 let aresSheetsIndex = 0;
+let brianSheetsIndex = 0;
+let sebastianSheetsIndex = 0;
+let lucianoSheetsIndex = 0;
+let brianSheetsIndex = 0;
+let sebastianSheetsIndex = 0;
+let lucianoSheetsIndex = 0;
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -17,6 +23,36 @@ const VENDEDORES_ARES_SHEETS = [
   { id: 259, name: 'Pablo Civilotti' },
   { id: 89, name: 'Pablo Valencia' },
   { id: 90, name: 'Walter Torres' }
+];
+
+// ========= VENDEDORES DE BRIAN - FAVIER (para Google Sheets) =========
+const VENDEDORES_BRIAN_SHEETS = [
+  { id: 223, name: 'Brian Vendedor' },
+  { id: 204, name: 'Caterina Coccagna' },
+  { id: 236, name: 'Fernando Mora' },
+  { id: 224, name: 'Gustavo Sanchez' },
+  { id: 35, name: 'Henry Pacheco' },
+  { id: 126, name: 'Jose Perez' },
+  { id: 70, name: 'Milagros Orozco' }
+];
+
+// ========= VENDEDORES DE SEBASTIAN - FAVIER (para Google Sheets) =========
+const VENDEDORES_SEBASTIAN_SHEETS = [
+  { id: 234, name: 'Alex Bustos' },
+  { id: 62, name: 'Gustavo Russo' },
+  { id: 193, name: 'Hanna' },
+  { id: 128, name: 'Lautaro Robledo' },
+  { id: 205, name: 'Rodrigo Coceres' },
+  { id: 232, name: 'Sabrina Coronel' }
+];
+
+// ========= VENDEDORES DE LUCIANO - FAVIER (para Google Sheets) =========
+const VENDEDORES_LUCIANO_SHEETS = [
+  { id: 169, name: 'Bruno Rodriguez' },
+  { id: 148, name: 'Eduardo Leocata' },
+  { id: 170, name: 'Juarez' },
+  { id: 175, name: 'Lourdes Borrelli' },
+  { id: 229, name: 'Nerea Escudero' }
 ];
 
 // ========= Helpers de limpieza / normalización =========
@@ -305,6 +341,369 @@ router.post('/sheets-ares', async (req, res) => {
   }
 });
 
+// ========= Webhook: Google Sheets Brian (equipo Favier) =========
+router.post('/sheets-brian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-brian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const {
+      nombre,
+      telefono,
+      modelo,
+      observaciones
+    } = req.body;
+
+    console.log('Webhook Sheets Brian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Round Robin entre los 7 vendedores de Brian
+    const vendedor = VENDEDORES_BRIAN_SHEETS[brianSheetsIndex];
+    brianSheetsIndex = (brianSheetsIndex + 1) % VENDEDORES_BRIAN_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Brian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-brian', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        observaciones || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Brian:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Sebastian (equipo Favier) =========
+router.post('/sheets-sebastian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-sebastian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const {
+      nombre,
+      telefono,
+      modelo,
+      observaciones
+    } = req.body;
+
+    console.log('Webhook Sheets Sebastian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Round Robin entre los 6 vendedores de Sebastian
+    const vendedor = VENDEDORES_SEBASTIAN_SHEETS[sebastianSheetsIndex];
+    sebastianSheetsIndex = (sebastianSheetsIndex + 1) % VENDEDORES_SEBASTIAN_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Sebastian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-sebastian', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        observaciones || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Sebastian:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Luciano (equipo Favier) =========
+router.post('/sheets-luciano', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-luciano-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const {
+      nombre,
+      telefono,
+      modelo,
+      observaciones
+    } = req.body;
+
+    console.log('Webhook Sheets Luciano recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Round Robin entre los 5 vendedores de Luciano
+    const vendedor = VENDEDORES_LUCIANO_SHEETS[lucianoSheetsIndex];
+    lucianoSheetsIndex = (lucianoSheetsIndex + 1) % VENDEDORES_LUCIANO_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Luciano: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-luciano', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        observaciones || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Luciano:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Brian (equipo Favier - dinámico) =========
+router.post('/sheets-brian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-brian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, formaPago, notas } = req.body;
+
+    console.log('Webhook Sheets Brian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Obtener vendedores dinámicamente del supervisor Brian (ID: 221)
+    const vendedores = await getVendedoresDeEquipo(221);
+    
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Brian' });
+    }
+
+    // Round Robin
+    const vendedor = vendedores[brianSheetsIndex % vendedores.length];
+    brianSheetsIndex = (brianSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Brian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, ?, 'nuevo', 'sheets-brian', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        formaPago || 'Consultar',
+        notas || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Brian:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Sebastian (equipo Favier - dinámico) =========
+router.post('/sheets-sebastian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-sebastian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, formaPago, notas } = req.body;
+
+    console.log('Webhook Sheets Sebastian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Obtener vendedores dinámicamente del supervisor Sebastian (ID: 173)
+    const vendedores = await getVendedoresDeEquipo(173);
+    
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Sebastian' });
+    }
+
+    // Round Robin
+    const vendedor = vendedores[sebastianSheetsIndex % vendedores.length];
+    sebastianSheetsIndex = (sebastianSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Sebastian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, ?, 'nuevo', 'sheets-sebastian', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        formaPago || 'Consultar',
+        notas || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Sebastian:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Luciano (equipo Favier - dinámico) =========
+router.post('/sheets-luciano', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-luciano-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, formaPago, notas } = req.body;
+
+    console.log('Webhook Sheets Luciano recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Obtener vendedores dinámicamente del supervisor Luciano (ID: 160)
+    const vendedores = await getVendedoresDeEquipo(160);
+    
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Luciano' });
+    }
+
+    // Round Robin
+    const vendedor = vendedores[lucianoSheetsIndex % vendedores.length];
+    lucianoSheetsIndex = (lucianoSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Luciano: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, ?, 'nuevo', 'sheets-luciano', ?, ?, 116, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        formaPago || 'Consultar',
+        notas || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Luciano:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 // 🆕 ENDPOINT PARA VER ESTADO DE LOS EQUIPOS (útil para debugging)
 router.get('/equipos/status', async (req, res) => {
   try {
@@ -352,7 +751,18 @@ router.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    vendedoresAresSheets: VENDEDORES_ARES_SHEETS.map(v => v.name)
+    vendedoresAresSheets: VENDEDORES_ARES_SHEETS.map(v => v.name),
+    supervisoresDinamicos: {
+      brian: { id: 221, equipo: 116 },
+      sebastian: { id: 173, equipo: 116 },
+      luciano: { id: 160, equipo: 116 }
+    },
+    sheetsRoundRobin: {
+      ares: aresSheetsIndex,
+      brian: brianSheetsIndex,
+      sebastian: sebastianSheetsIndex,
+      luciano: lucianoSheetsIndex
+    }
   });
 });
 
