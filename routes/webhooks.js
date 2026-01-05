@@ -257,9 +257,9 @@ router.post('/sheets-ares', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-ares', ?, ?, 82, NOW(), NOW())`,
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-ares', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -316,9 +316,9 @@ router.post('/sheets-brian', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'nuevo', 'sheets-brian', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, ?, 'nuevo', 'sheets-brian', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -376,9 +376,9 @@ router.post('/sheets-sebastian', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'nuevo', 'sheets-sebastian', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, ?, 'nuevo', 'sheets-sebastian', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -436,9 +436,9 @@ router.post('/sheets-luciano', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'nuevo', 'sheets-luciano', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, ?, 'nuevo', 'sheets-luciano', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -496,9 +496,9 @@ router.post('/sheets-brian-dp', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-brian-dp', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-brian-dp', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -555,9 +555,9 @@ router.post('/sheets-sebastian-dp', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-sebastian-dp', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-sebastian-dp', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -614,9 +614,9 @@ router.post('/sheets-luciano-dp', async (req, res) => {
 
     await pool.execute(
       `INSERT INTO leads
-        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-luciano-dp', ?, ?, 116, NOW(), NOW())`,
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-luciano-dp', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
