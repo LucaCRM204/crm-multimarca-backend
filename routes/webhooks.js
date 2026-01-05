@@ -4,20 +4,19 @@ const { getAssignedVendorByBrand } = require('../utils/assign');
 const router = express.Router();
 
 // ========= Índices Round Robin para Sheets =========
-let nederSheetsIndex = 0;
+let aresSheetsIndex = 0;
 
-// ========= VENDEDORES DE NEDER - ROBAINA (para Google Sheets) =========
-const VENDEDORES_NEDER_SHEETS = [
-  { id: 196, name: 'Ayala Franco' },
-  { id: 197, name: 'Berto Lautaro' },
-  { id: 191, name: 'Espinola Camila' },
-  { id: 228, name: 'Lola Basbus' },
-  { id: 184, name: 'Lucas Gonzalez' },
-  { id: 185, name: 'Maite Mendicute' },
-  { id: 195, name: 'Mercado Mauro' },
-  { id: 192, name: 'Prato Iara' },
-  { id: 186, name: 'Romina Sanabria' },
-  { id: 200, name: 'Varas Mauricio' }
+// ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
+const VENDEDORES_ARES_SHEETS = [
+  { id: 226, name: 'Esteban Cappone' },
+  { id: 260, name: 'Fiorella Chirico' },
+  { id: 256, name: 'Gisela Sanchez' },
+  { id: 258, name: 'Gonzalo Rafalski' },
+  { id: 225, name: 'Jaqueline Susbielles' },
+  { id: 257, name: 'Luana Rios' },
+  { id: 259, name: 'Pablo Civilotti' },
+  { id: 89, name: 'Pablo Valencia' },
+  { id: 90, name: 'Walter Torres' }
 ];
 
 // ========= Helpers de limpieza / normalización =========
@@ -247,11 +246,11 @@ router.post('/lacomer', async (req, res) => {
   }
 });
 
-// ========= Webhook: Google Sheets Neder (equipo Robaina) =========
-router.post('/sheets-neder', async (req, res) => {
+// ========= Webhook: Google Sheets Ares (equipo Robaina) =========
+router.post('/sheets-ares', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
-    if (sheetKey !== 'alluma-sheets-neder-2024') {
+    if (sheetKey !== 'alluma-sheets-ares-2024') {
       return res.status(401).json({ error: 'No autorizado' });
     }
 
@@ -262,7 +261,7 @@ router.post('/sheets-neder', async (req, res) => {
       observaciones
     } = req.body;
 
-    console.log('Webhook Sheets Neder recibido:', JSON.stringify(req.body, null, 2));
+    console.log('Webhook Sheets Ares recibido:', JSON.stringify(req.body, null, 2));
 
     if (!nombre || !telefono) {
       return res.status(400).json({ 
@@ -271,19 +270,19 @@ router.post('/sheets-neder', async (req, res) => {
       });
     }
 
-    // Round Robin entre los 10 vendedores de Neder
-    const vendedor = VENDEDORES_NEDER_SHEETS[nederSheetsIndex];
-    nederSheetsIndex = (nederSheetsIndex + 1) % VENDEDORES_NEDER_SHEETS.length;
+    // Round Robin entre los 9 vendedores de Ares
+    const vendedor = VENDEDORES_ARES_SHEETS[aresSheetsIndex];
+    aresSheetsIndex = (aresSheetsIndex + 1) % VENDEDORES_ARES_SHEETS.length;
 
     const assigned_to = vendedor.id;
 
-    console.log(`Sheets Neder: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+    console.log(`Sheets Ares: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
     await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
        VALUES
-        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-neder', ?, ?, 259, NOW(), NOW())`,
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-ares', ?, ?, 82, NOW(), NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -301,7 +300,7 @@ router.post('/sheets-neder', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error webhook Sheets Neder:', error);
+    console.error('Error webhook Sheets Ares:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
@@ -338,7 +337,7 @@ router.get('/equipos/status', async (req, res) => {
       totalEquipos: equipos.length,
       roundRobinState: roundRobinIndex,
       sheetsRoundRobin: {
-        neder: nederSheetsIndex
+        ares: aresSheetsIndex
       }
     });
 
@@ -353,7 +352,7 @@ router.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    vendedoresNederSheets: VENDEDORES_NEDER_SHEETS.map(v => v.name)
+    vendedoresAresSheets: VENDEDORES_ARES_SHEETS.map(v => v.name)
   });
 });
 
