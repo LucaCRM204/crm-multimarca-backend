@@ -1,7 +1,24 @@
-const express = require('express');
+﻿const express = require('express');
 const pool = require('../db');
 const { getAssignedVendorByBrand } = require('../utils/assign');
 const router = express.Router();
+
+// ========= Índices Round Robin para Sheets =========
+let nederSheetsIndex = 0;
+
+// ========= VENDEDORES DE NEDER - ROBAINA (para Google Sheets) =========
+const VENDEDORES_NEDER_SHEETS = [
+  { id: 196, name: 'Ayala Franco' },
+  { id: 197, name: 'Berto Lautaro' },
+  { id: 191, name: 'Espinola Camila' },
+  { id: 228, name: 'Lola Basbus' },
+  { id: 184, name: 'Lucas Gonzalez' },
+  { id: 185, name: 'Maite Mendicute' },
+  { id: 195, name: 'Mercado Mauro' },
+  { id: 192, name: 'Prato Iara' },
+  { id: 186, name: 'Romina Sanabria' },
+  { id: 200, name: 'Varas Mauricio' }
+];
 
 // ========= Helpers de limpieza / normalización =========
 
@@ -146,15 +163,7 @@ router.post('/lacomer', async (req, res) => {
     let marca     = cleanText(body.marca || 'vw').toLowerCase();
     let formaPago = cleanText(body.formaPago || 'Consultar');
     let notas     = cleanText(body.notas || '');
-    
-    // 🔥 CAMBIO: Ahora lee el campo 'fuente' del body, si no viene usa 'lacomer' por defecto
-    const fuente  = cleanText(body.fuente) || 'lacomer';
-    
-    // 🆕 Campos extra de la ruleta digital
-    const dni = cleanText(body.dni || '');
-    const email = cleanText(body.email || '');
-    const premio = cleanText(body.premio || '');
-    const codigoPremio = cleanText(body.codigoPremio || '');
+    const fuente  = 'lacomer';
     
     // 🆕 Nuevo: Recibir equipoId desde Zapier (puede venir como equipoId, teamId o equipo_id)
     const equipoId = body.equipoId || body.teamId || body.equipo_id;
@@ -212,16 +221,11 @@ router.post('/lacomer', async (req, res) => {
       [nombre, telefono, modelo, marca, formaPago, fuente, notas, assigned_to]
     );
 
-    // 🔥 Log mejorado para identificar origen
-    const logEmoji = fuente === 'ruleta_digital' ? '🎰' : '📥';
-    const logMsg = `${logEmoji} Lead ${fuente.toUpperCase()} creado: ID ${result.insertId}, marca ${marca}, asignado a vendedor ${assigned_to}`;
-    console.log(logMsg);
+    const logMsg = equipoId 
+      ? `✅ Lead La Comer creado: ID ${result.insertId}, equipo ${equipoId}, marca ${marca}, asignado a vendedor ${assigned_to}`
+      : `✅ Lead La Comer creado: ID ${result.insertId}, marca ${marca}, asignado a vendedor ${assigned_to} (sin equipo específico)`;
     
-    if (fuente === 'ruleta_digital' && codigoPremio) {
-      console.log(`   🎫 Código premio: ${codigoPremio}`);
-      console.log(`   🏆 Premio: ${premio}`);
-      console.log(`   🪪 DNI: ${dni}`);
-    }
+    console.log(logMsg);
 
     // Respuesta exitosa
     res.json({
@@ -229,9 +233,7 @@ router.post('/lacomer', async (req, res) => {
       leadId: result.insertId,
       assignedTo: assigned_to,
       marca: marca,
-      fuente: fuente,
       equipoId: equipoId || null,
-      codigoPremio: codigoPremio || null,
       message: 'Lead creado correctamente',
     });
 
@@ -242,6 +244,65 @@ router.post('/lacomer', async (req, res) => {
       error: 'Error interno del servidor',
       details: error.message 
     });
+  }
+});
+
+// ========= Webhook: Google Sheets Neder (equipo Robaina) =========
+router.post('/sheets-neder', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-neder-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const {
+      nombre,
+      telefono,
+      modelo,
+      observaciones
+    } = req.body;
+
+    console.log('Webhook Sheets Neder recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Round Robin entre los 10 vendedores de Neder
+    const vendedor = VENDEDORES_NEDER_SHEETS[nederSheetsIndex];
+    nederSheetsIndex = (nederSheetsIndex + 1) % VENDEDORES_NEDER_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Neder: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, equipo, created_at, last_status_change)
+       VALUES
+        (?, ?, ?, 'Consultar', 'nuevo', 'sheets-neder', ?, ?, 259, NOW(), NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        observaciones || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Neder:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
 
@@ -275,13 +336,25 @@ router.get('/equipos/status', async (req, res) => {
       ok: true,
       equipos,
       totalEquipos: equipos.length,
-      roundRobinState: roundRobinIndex
+      roundRobinState: roundRobinIndex,
+      sheetsRoundRobin: {
+        neder: nederSheetsIndex
+      }
     });
 
   } catch (error) {
     console.error('❌ Error al obtener status de equipos:', error);
     res.status(500).json({ error: 'Error al obtener información de equipos' });
   }
+});
+
+// ========= Health check =========
+router.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    vendedoresNederSheets: VENDEDORES_NEDER_SHEETS.map(v => v.name)
+  });
 });
 
 module.exports = router;
