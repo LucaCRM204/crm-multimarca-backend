@@ -11,6 +11,7 @@ let lucianoSheetsIndex = 0;
 let brianDPSheetsIndex = 0;
 let sebastianDPSheetsIndex = 0;
 let lucianoDPSheetsIndex = 0;
+let favierSheetsIndex = 0; // NUEVO: índice para Favier
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -23,6 +24,13 @@ const VENDEDORES_ARES_SHEETS = [
   { id: 259, name: 'Pablo Civilotti' },
   { id: 89, name: 'Pablo Valencia' },
   { id: 90, name: 'Walter Torres' }
+];
+
+// ========= VENDEDORES DE FAVIER (para Google Sheets) =========
+const VENDEDORES_FAVIER_SHEETS = [
+  { id: 170, name: 'Juarez' },
+  { id: 172, name: 'Sebastian Calderon' },
+  { id: 223, name: 'Brian Vendedor' }
 ];
 
 // ========= Helpers de limpieza / normalización =========
@@ -278,6 +286,60 @@ router.post('/sheets-ares', async (req, res) => {
 
   } catch (error) {
     console.error('Error webhook Sheets Ares:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Google Sheets Favier (3 vendedores fijos) =========
+router.post('/sheets-favier', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'alluma-sheets-favier-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, formaPago, notas, observaciones } = req.body;
+
+    console.log('📥 Webhook Sheets Favier recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const vendedor = VENDEDORES_FAVIER_SHEETS[favierSheetsIndex];
+    favierSheetsIndex = (favierSheetsIndex + 1) % VENDEDORES_FAVIER_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`📋 Sheets Favier: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'nuevo', 'sheets-favier', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        formaPago || 'Consultar',
+        notas || observaciones || '',
+        assigned_to
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Sheets Favier:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
@@ -689,8 +751,10 @@ router.get('/health', (req, res) => {
       luciano: lucianoSheetsIndex,
       brianDP: brianDPSheetsIndex,
       sebastianDP: sebastianDPSheetsIndex,
-      lucianoDP: lucianoDPSheetsIndex
-    }
+      lucianoDP: lucianoDPSheetsIndex,
+      favier: favierSheetsIndex
+    },
+    vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name)
   });
 });
 
