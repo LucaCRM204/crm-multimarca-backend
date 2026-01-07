@@ -1,10 +1,10 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING v8
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING v7.1
  * ============================================
- * CAMBIOS v8:
- * - CORREGIDO: Cloudinary - agregado access_mode: 'public' para PDFs
- * 
+ * CAMBIOS v7.1:
+ * - CORREGIDO: Cloudinary - resource_type: 'raw' + access_mode: 'public' para PDFs
+ *
  * CAMBIOS v7:
  * - CORREGIDO: Permisos de autorización para supervisores
  * - Supervisor puede autorizar ventas de vendedores que le reportan
@@ -237,9 +237,9 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       try {
         const result = await cloudinary.uploader.upload(req.file.path, {
           folder: 'scoring',
-          resource_type: 'auto',
+          resource_type: 'raw',  // CAMBIADO: usar 'raw' para PDFs
           public_id: `venta-${Date.now()}`,
-          access_mode: 'public',  // <-- CORREGIDO v8: Permite acceso público a PDFs
+          access_mode: 'public',  // AGREGADO: acceso público
         });
         pdfUrl = result.secure_url;
         fs.unlink(req.file.path, () => {});
