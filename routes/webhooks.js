@@ -161,7 +161,7 @@ router.post('/lacomer', async (req, res) => {
     let marca     = cleanText(body.marca || 'vw').toLowerCase();
     let formaPago = cleanText(body.formaPago || 'Consultar');
     let notas     = cleanText(body.notas || '');
-    const fuente  = 'lacomer';
+    const fuente  = cleanText(body.fuente) || 'lacomer';
     
     const equipoId = body.equipoId || body.teamId || body.equipo_id;
     
@@ -180,7 +180,11 @@ router.post('/lacomer', async (req, res) => {
 
     let assigned_to;
 
-    if (equipoId) {
+    // Si viene de la ruleta digital, asignar directamente al vendedor Ruleta
+    if (fuente === 'ruleta_digital') {
+      assigned_to = 266; // Vendedor Ruleta
+      console.log('🎰 Lead de Ruleta Digital: Asignado directamente a vendedor Ruleta (ID: 266)');
+    } else if (equipoId) {
       console.log(`👥 Asignando lead al equipo ID: ${equipoId}`);
       
       assigned_to = await assignVendorInTeam(equipoId);
