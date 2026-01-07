@@ -1,14 +1,11 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING v7.1
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING v8
  * ============================================
- * CAMBIOS v7.1:
- * - CORREGIDO: Cloudinary - resource_type: 'raw' + access_mode: 'public' para PDFs
- *
- * CAMBIOS v7:
- * - CORREGIDO: Permisos de autorización para supervisores
- * - Supervisor puede autorizar ventas de vendedores que le reportan
- * - Gerente puede autorizar ventas de todo su equipo
+ * CAMBIOS v8:
+ * - Mejor manejo de errores con mensajes detallados
+ * - Cloudinary opcional (no falla si no está configurado)
+ * - Logs mejorados para debug
  */
 
 const express = require('express');
@@ -18,15 +15,24 @@ const path = require('path');
 const fs = require('fs');
 
 // ============================================
-// CLOUDINARY SETUP
+// CLOUDINARY SETUP (OPCIONAL)
 // ============================================
-const cloudinary = require('cloudinary').v2;
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+let cloudinary = null;
+try {
+  if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+    cloudinary = require('cloudinary').v2;
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+    });
+    console.log('✅ Cloudinary configurado correctamente');
+  } else {
+    console.log('⚠️ Cloudinary no configurado - archivos se guardarán localmente');
+  }
+} catch (err) {
+  console.log('⚠️ Error configurando Cloudinary:', err.message);
+}
 
 // Configuración de multer para subir PDFs
 const storage = multer.diskStorage({
@@ -101,45 +107,63 @@ const ROLES_AUTORIZACION = ['owner', 'director', 'gerente', 'supervisor'];
 const ROLES_SCORING = ['owner', 'jefe_scoring', 'scoring'];
 const ROLES_COBRANZA = ['owner', 'cobranza'];
 const ROLES_VER_TODO = ['owner', 'director'];
+const ROLES_ELIMINAR = ['owner', 'jefe_scoring']; // Solo owner y jefe_scoring pueden eliminar ventas
 
 // Helper para crear alertas
 async function crearAlerta(pool, ventaId, userId, tipo, mensaje) {
-  await pool.query(`
-    INSERT INTO scoring_alertas (venta_id, user_id, tipo, mensaje)
-    VALUES (?, ?, ?, ?)
-  `, [ventaId, userId, tipo, mensaje]);
+  try {
+    await pool.query(`
+      INSERT INTO scoring_alertas (venta_id, user_id, tipo, mensaje)
+      VALUES (?, ?, ?, ?)
+    `, [ventaId, userId, tipo, mensaje]);
+  } catch (err) {
+    console.error('Error creando alerta:', err.message);
+  }
 }
 
 // Helper para crear nota en historial
 async function crearNota(pool, ventaId, userId, tipo, estadoAnterior, estadoNuevo, mensaje, visiblePara = null) {
-  await pool.query(`
-    INSERT INTO scoring_notas (venta_id, user_id, tipo, estado_anterior, estado_nuevo, mensaje, visible_para)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [ventaId, userId, tipo, estadoAnterior, estadoNuevo, mensaje, visiblePara ? JSON.stringify(visiblePara) : null]);
+  try {
+    await pool.query(`
+      INSERT INTO scoring_notas (venta_id, user_id, tipo, estado_anterior, estado_nuevo, mensaje, visible_para)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [ventaId, userId, tipo, estadoAnterior, estadoNuevo, mensaje, visiblePara ? JSON.stringify(visiblePara) : null]);
+  } catch (err) {
+    console.error('Error creando nota:', err.message);
+  }
 }
 
 // ============================================
 // HELPER: Cambiar estado del lead automáticamente
 // ============================================
 async function cambiarEstadoLead(pool, leadId, nuevoEstado, motivo) {
-  const timestamp = new Date().toISOString();
-  await pool.query(`
-    UPDATE leads 
-    SET estado = ?, 
-        notas = CONCAT(IFNULL(notas, ''), '\n[', ?, '] Estado cambiado automáticamente a ', ?, ': ', ?)
-    WHERE id = ?
-  `, [nuevoEstado, timestamp, nuevoEstado, motivo || 'Cambio desde scoring', leadId]);
+  try {
+    const timestamp = new Date().toISOString();
+    await pool.query(`
+      UPDATE leads 
+      SET estado = ?, 
+          notas = CONCAT(IFNULL(notas, ''), '\n[', ?, '] Estado cambiado automáticamente a ', ?, ': ', ?)
+      WHERE id = ?
+    `, [nuevoEstado, timestamp, nuevoEstado, motivo || 'Cambio desde scoring', leadId]);
+  } catch (err) {
+    console.error('Error cambiando estado de lead:', err.message);
+  }
 }
 
 // ============================================
 // HELPER: Crear mensaje interno
 // ============================================
 async function crearMensajeInterno(pool, ventaId, remitenteId, destinatarioId, mensaje, tipo) {
-  const [result] = await pool.query(`
-    INSERT INTO scoring_mensajes (venta_id, remitente_id, destinatario_id, mensaje, tipo)
-    VALUES (?, ?, ?, ?, ?)
-  `, [ventaId, remitenteId, destinatarioId, mensaje, tipo]);
-  return result.insertId;
+  try {
+    const [result] = await pool.query(`
+      INSERT INTO scoring_mensajes (venta_id, remitente_id, destinatario_id, mensaje, tipo)
+      VALUES (?, ?, ?, ?, ?)
+    `, [ventaId, remitenteId, destinatarioId, mensaje, tipo]);
+    return result.insertId;
+  } catch (err) {
+    console.error('Error creando mensaje interno:', err.message);
+    return null;
+  }
 }
 
 // ============================================
@@ -196,18 +220,23 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
   const io = req.app.get('io');
   const { id: userId, role } = req.user;
   
+  console.log('📝 Intentando crear venta - Usuario:', userId, 'Rol:', role);
+  
   if (!ROLES_VENTAS.includes(role)) {
     return res.status(403).json({ error: 'No tenés permiso para crear ventas' });
   }
   
   try {
-    const { lead_id, fecha_venta, notas_vendedor } = req.body;
+    const { lead_id, fecha_venta, notas_vendedor, tipo_venta } = req.body;
+    
+    console.log('📝 Datos recibidos:', { lead_id, fecha_venta, tipo_venta });
     
     if (!lead_id || !fecha_venta) {
       return res.status(400).json({ error: 'lead_id y fecha_venta son obligatorios' });
     }
     
     // Obtener info del lead
+    console.log('🔍 Buscando lead:', lead_id);
     const [leadRows] = await pool.query(`
       SELECT l.*, u.reportsTo as supervisor_id
       FROM leads l
@@ -220,6 +249,7 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     }
     
     const lead = leadRows[0];
+    console.log('✅ Lead encontrado:', lead.nombre);
     
     // Verificar que el lead no esté en estado protegido
     if ([ESTADOS_LEAD_PROTEGIDOS.RECHAZADO_SUPERVISOR, ESTADOS_LEAD_PROTEGIDOS.RECHAZADO_SCORING].includes(lead.estado)) {
@@ -230,36 +260,51 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     }
     
     const supervisorId = lead.supervisor_id || null;
+    console.log('👤 Supervisor ID:', supervisorId);
     
-    // Subir archivo a Cloudinary si existe
+    // Subir archivo a Cloudinary si existe y está configurado
     let pdfUrl = null;
     if (req.file) {
-      try {
-        const result = await cloudinary.uploader.upload(req.file.path, {
-          folder: 'scoring',
-          resource_type: 'raw',  // CAMBIADO: usar 'raw' para PDFs
-          public_id: `venta-${Date.now()}`,
-          access_mode: 'public',  // AGREGADO: acceso público
-        });
-        pdfUrl = result.secure_url;
-        fs.unlink(req.file.path, () => {});
-      } catch (cloudinaryError) {
-        console.error('Error subiendo a Cloudinary:', cloudinaryError);
-        pdfUrl = `/tmp/scoring/${req.file.filename}`;
+      console.log('📎 Archivo recibido:', req.file.originalname);
+      
+      if (cloudinary) {
+        try {
+          const result = await cloudinary.uploader.upload(req.file.path, {
+            folder: 'scoring',
+            resource_type: 'auto',
+            public_id: `venta-${Date.now()}`,
+            access_mode: 'public',  // CORREGIDO: Permite acceso público a PDFs
+            timeout: 15000
+          });
+          pdfUrl = result.secure_url;
+          console.log('✅ Archivo subido a Cloudinary:', pdfUrl);
+        } catch (cloudinaryError) {
+          console.error('⚠️ Error subiendo a Cloudinary:', cloudinaryError.message);
+          // Continuar sin el archivo
+        }
+      } else {
+        console.log('⚠️ Cloudinary no configurado, archivo no se guardará');
       }
+      
+      // Limpiar archivo temporal
+      fs.unlink(req.file.path, () => {});
     }
     
     // Crear la venta
+    console.log('💾 Insertando venta en BD...');
     const [result] = await pool.query(`
       INSERT INTO ventas_scoring 
-      (lead_id, vendedor_id, supervisor_id, estado, fecha_venta, pdf_url, notas_vendedor)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [lead_id, userId, supervisorId, ESTADOS.PENDIENTE_SUPERVISOR, fecha_venta, pdfUrl, notas_vendedor || null]);
+      (lead_id, vendedor_id, supervisor_id, estado, fecha_venta, pdf_url, notas_vendedor, tipo_venta)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [lead_id, userId, supervisorId, ESTADOS.PENDIENTE_SUPERVISOR, fecha_venta, pdfUrl, notas_vendedor || null, tipo_venta || null]);
     
     const ventaId = result.insertId;
+    console.log('✅ Venta creada con ID:', ventaId);
     
+    // Crear nota (no bloqueante)
     await crearNota(pool, ventaId, userId, 'creacion', null, ESTADOS.PENDIENTE_SUPERVISOR, 'Venta creada por vendedor');
     
+    // Crear alerta para supervisor si existe
     if (supervisorId) {
       await crearAlerta(pool, ventaId, supervisorId, 'nueva_venta', `Nueva venta pendiente de autorización: ${lead.nombre}`);
       
@@ -279,8 +324,15 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error al crear venta:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('❌ Error al crear venta:', error.message);
+    console.error('Stack:', error.stack);
+    if (error.sqlMessage) {
+      console.error('SQL Error:', error.sqlMessage);
+    }
+    res.status(500).json({ 
+      error: error.message || 'Error interno del servidor',
+      sqlError: error.sqlMessage || null
+    });
   }
 });
 
@@ -346,8 +398,8 @@ router.get('/', authMiddleware, async (req, res) => {
     res.json(ventas);
     
   } catch (error) {
-    console.error('Error al listar ventas:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al listar ventas:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -404,8 +456,8 @@ router.get('/:id', authMiddleware, async (req, res) => {
     res.json({ ok: true, venta, notas, mensajes });
     
   } catch (error) {
-    console.error('Error al obtener venta:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al obtener venta:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -449,9 +501,9 @@ router.post('/:id/autorizar', authMiddleware, async (req, res) => {
     
     await pool.query(`
       UPDATE ventas_scoring 
-      SET estado = ?, pv = ?, medio_pago = ?, autorizado_por = ?, autorizado_at = NOW()
+      SET estado = ?, pv = ?, medio_pago = ?, autorizado_at = NOW()
       WHERE id = ?
-    `, [ESTADOS.INGRESADA, pv, medio_pago, userId, id]);
+    `, [ESTADOS.INGRESADA, pv, medio_pago, id]);
     
     await crearNota(pool, id, userId, 'cambio_estado', ESTADOS.PENDIENTE_SUPERVISOR, ESTADOS.INGRESADA, 'Venta autorizada por supervisor');
     
@@ -462,8 +514,8 @@ router.post('/:id/autorizar', authMiddleware, async (req, res) => {
     res.json({ ok: true, mensaje: 'Venta autorizada correctamente' });
     
   } catch (error) {
-    console.error('Error al autorizar venta:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al autorizar venta:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -509,11 +561,9 @@ router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
     await pool.query(`
       UPDATE ventas_scoring 
       SET estado = 'rechazada', 
-          motivo_rechazo = ?,
-          rechazado_por = ?,
-          rechazado_at = NOW()
+          motivo_rechazo = ?
       WHERE id = ?
-    `, [motivo, userId, id]);
+    `, [motivo, id]);
     
     // CAMBIAR ESTADO DEL LEAD A 'rechazado_supervisor'
     await cambiarEstadoLead(
@@ -547,8 +597,8 @@ router.post('/:id/rechazar-supervisor', authMiddleware, async (req, res) => {
     res.json({ ok: true, mensaje: 'Venta rechazada correctamente' });
     
   } catch (error) {
-    console.error('Error al rechazar venta:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al rechazar venta:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -597,8 +647,8 @@ router.post('/:id/tomar', authMiddleware, async (req, res) => {
     res.json({ ok: true, mensaje: 'Venta asignada correctamente' });
     
   } catch (error) {
-    console.error('Error al tomar venta:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al tomar venta:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -678,8 +728,7 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     
     // SI ES OBSERVACIÓN, GUARDAR TIMESTAMP Y CREAR MENSAJE
     if (nuevo_estado === ESTADOS.OBSERVADA) {
-      updateQuery += `, observada_at = NOW(), observada_por = ?`;
-      updateParams.push(userId);
+      updateQuery += `, observada_at = NOW()`;
       
       // Crear mensaje interno automático para supervisor
       await crearMensajeInterno(
@@ -709,8 +758,6 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
       updateQuery += `, scoring_completado_at = NOW()`;
     } else if (nuevo_estado === ESTADOS.FINALIZADA) {
       updateQuery += `, cobranza_completada_at = NOW()`;
-    } else if (nuevo_estado === ESTADOS.CARGADA_CONCESIONARIO) {
-      updateQuery += `, cargada_concesionario_at = NOW()`;
     }
     
     // Asignar usuario de cobranza si corresponde
@@ -765,8 +812,8 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     res.json({ ok: true, mensaje: `Estado cambiado a "${nuevo_estado}"` });
     
   } catch (error) {
-    console.error('Error al cambiar estado:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al cambiar estado:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -846,17 +893,17 @@ router.post('/:id/mensaje', authMiddleware, async (req, res) => {
       if (venta.estado === 'observada') {
         await pool.query(`
           UPDATE ventas_scoring 
-          SET estado = 'en_proceso', resuelta_at = NOW(), resuelta_por = ?
+          SET estado = 'en_proceso', resuelta_at = NOW()
           WHERE id = ?
-        `, [userId, id]);
+        `, [id]);
         
         await crearNota(pool, id, userId, 'cambio_estado', 'observada', 'en_proceso', `Corrección enviada: ${mensaje}`);
       } else {
         await pool.query(`
           UPDATE ventas_scoring 
-          SET resuelta_at = NOW(), resuelta_por = ?
+          SET resuelta_at = NOW()
           WHERE id = ?
-        `, [userId, id]);
+        `, [id]);
       }
       
       // Crear alerta para el usuario de scoring
@@ -898,8 +945,8 @@ router.post('/:id/mensaje', authMiddleware, async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error al enviar mensaje:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al enviar mensaje:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -953,8 +1000,8 @@ router.get('/:id/mensajes', authMiddleware, async (req, res) => {
     res.json(mensajes);
     
   } catch (error) {
-    console.error('Error al obtener mensajes:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al obtener mensajes:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -1014,8 +1061,8 @@ router.put('/:id/montos', authMiddleware, async (req, res) => {
     res.json({ ok: true, mensaje: 'Montos actualizados correctamente' });
     
   } catch (error) {
-    console.error('Error al actualizar montos:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al actualizar montos:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -1040,8 +1087,8 @@ router.get('/alertas/mis-alertas', authMiddleware, async (req, res) => {
     res.json(alertas);
     
   } catch (error) {
-    console.error('Error al obtener alertas:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al obtener alertas:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -1063,8 +1110,8 @@ router.post('/alertas/:alertaId/leer', authMiddleware, async (req, res) => {
     res.json({ ok: true });
     
   } catch (error) {
-    console.error('Error al marcar alerta como leída:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al marcar alerta como leída:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -1085,8 +1132,8 @@ router.get('/mensajes/no-leidos', authMiddleware, async (req, res) => {
     res.json({ count: result[0]?.count || 0 });
     
   } catch (error) {
-    console.error('Error al contar mensajes:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al contar mensajes:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -1166,8 +1213,117 @@ router.get('/stats/dashboard', authMiddleware, async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error al obtener estadísticas:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error('Error al obtener estadísticas:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 14. ELIMINAR VENTA (Solo Owner y Jefe Scoring)
+// ============================================
+router.delete('/:id', authMiddleware, async (req, res) => {
+  const pool = req.app.get('db');
+  const io = req.app.get('io');
+  const { id } = req.params;
+  const { id: userId, role, name: userName } = req.user;
+  
+  console.log(`🗑️ Intento de eliminar venta ${id} por usuario ${userId} (${role})`);
+  
+  // Verificar permisos - Solo owner y jefe_scoring pueden eliminar
+  if (!ROLES_ELIMINAR.includes(role)) {
+    console.log(`❌ Usuario ${userId} sin permisos para eliminar (rol: ${role})`);
+    return res.status(403).json({ 
+      error: 'No tenés permiso para eliminar ventas',
+      detalle: 'Solo el Owner y el Jefe de Scoring pueden eliminar ventas del sistema.'
+    });
+  }
+  
+  try {
+    // Verificar que la venta existe
+    const [ventas] = await pool.query(`
+      SELECT vs.*, l.nombre as cliente_nombre 
+      FROM ventas_scoring vs
+      LEFT JOIN leads l ON vs.lead_id = l.id
+      WHERE vs.id = ?
+    `, [id]);
+    
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    console.log(`📋 Venta encontrada: ID ${id}, Cliente: ${venta.cliente_nombre}, Estado: ${venta.estado}`);
+    
+    // Iniciar transacción para eliminar todo de forma segura
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // 1. Eliminar mensajes asociados
+      const [deletedMensajes] = await connection.query(`
+        DELETE FROM scoring_mensajes WHERE venta_id = ?
+      `, [id]);
+      console.log(`🗑️ Mensajes eliminados: ${deletedMensajes.affectedRows}`);
+      
+      // 2. Eliminar notas/historial asociado
+      const [deletedNotas] = await connection.query(`
+        DELETE FROM scoring_notas WHERE venta_id = ?
+      `, [id]);
+      console.log(`🗑️ Notas eliminadas: ${deletedNotas.affectedRows}`);
+      
+      // 3. Eliminar alertas asociadas
+      const [deletedAlertas] = await connection.query(`
+        DELETE FROM scoring_alertas WHERE venta_id = ?
+      `, [id]);
+      console.log(`🗑️ Alertas eliminadas: ${deletedAlertas.affectedRows}`);
+      
+      // 4. Eliminar la venta
+      const [deletedVenta] = await connection.query(`
+        DELETE FROM ventas_scoring WHERE id = ?
+      `, [id]);
+      console.log(`🗑️ Venta eliminada: ${deletedVenta.affectedRows}`);
+      
+      // Confirmar transacción
+      await connection.commit();
+      connection.release();
+      
+      console.log(`✅ Venta ${id} eliminada correctamente por ${userName} (${role})`);
+      
+      // Notificar por socket si está disponible
+      if (io) {
+        io.emit('scoring:venta_eliminada', { 
+          ventaId: id,
+          eliminadoPor: userName,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      res.json({ 
+        ok: true, 
+        mensaje: 'Venta eliminada correctamente',
+        detalles: {
+          ventaId: id,
+          cliente: venta.cliente_nombre,
+          mensajesEliminados: deletedMensajes.affectedRows,
+          notasEliminadas: deletedNotas.affectedRows,
+          alertasEliminadas: deletedAlertas.affectedRows
+        }
+      });
+      
+    } catch (transactionError) {
+      // Si algo falla, revertir la transacción
+      await connection.rollback();
+      connection.release();
+      throw transactionError;
+    }
+    
+  } catch (error) {
+    console.error('❌ Error al eliminar venta:', error.message);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      error: error.message || 'Error interno del servidor',
+      sqlError: error.sqlMessage || null
+    });
   }
 });
 
