@@ -1,7 +1,10 @@
 /**
  * ============================================
- * ROUTES/SCORING.JS - MÓDULO DE SCORING v7
+ * ROUTES/SCORING.JS - MÓDULO DE SCORING v8
  * ============================================
+ * CAMBIOS v8:
+ * - CORREGIDO: Cloudinary - agregado access_mode: 'public' para PDFs
+ * 
  * CAMBIOS v7:
  * - CORREGIDO: Permisos de autorización para supervisores
  * - Supervisor puede autorizar ventas de vendedores que le reportan
@@ -198,7 +201,7 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
   }
   
   try {
-    const { lead_id, fecha_venta, notas_vendedor, tipo_venta } = req.body;
+    const { lead_id, fecha_venta, notas_vendedor } = req.body;
     
     if (!lead_id || !fecha_venta) {
       return res.status(400).json({ error: 'lead_id y fecha_venta son obligatorios' });
@@ -236,6 +239,7 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
           folder: 'scoring',
           resource_type: 'auto',
           public_id: `venta-${Date.now()}`,
+          access_mode: 'public',  // <-- CORREGIDO v8: Permite acceso público a PDFs
         });
         pdfUrl = result.secure_url;
         fs.unlink(req.file.path, () => {});
@@ -248,9 +252,9 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     // Crear la venta
     const [result] = await pool.query(`
       INSERT INTO ventas_scoring 
-      (lead_id, vendedor_id, supervisor_id, estado, fecha_venta, pdf_url, notas_vendedor, tipo_venta)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [lead_id, userId, supervisorId, ESTADOS.PENDIENTE_SUPERVISOR, fecha_venta, pdfUrl, notas_vendedor || null, tipo_venta || null]);
+      (lead_id, vendedor_id, supervisor_id, estado, fecha_venta, pdf_url, notas_vendedor)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [lead_id, userId, supervisorId, ESTADOS.PENDIENTE_SUPERVISOR, fecha_venta, pdfUrl, notas_vendedor || null]);
     
     const ventaId = result.insertId;
     
