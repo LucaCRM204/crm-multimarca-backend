@@ -259,6 +259,19 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       });
     }
     
+    // VALIDACIÓN: Verificar que no exista ya una venta para este lead
+    const [ventasExistentes] = await pool.query(`
+      SELECT id, estado FROM ventas_scoring WHERE lead_id = ? LIMIT 1
+    `, [lead_id]);
+    
+    if (ventasExistentes.length > 0) {
+      const ventaExistente = ventasExistentes[0];
+      return res.status(400).json({ 
+        error: 'Ya existe una venta para este lead',
+        detalle: `Este lead ya tiene una venta (ID: ${ventaExistente.id}, Estado: ${ventaExistente.estado}). No se pueden crear ventas duplicadas.`
+      });
+    }
+    
     const supervisorId = lead.supervisor_id || null;
     console.log('👤 Supervisor ID:', supervisorId);
     
@@ -813,6 +826,153 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     
   } catch (error) {
     console.error('Error al cambiar estado:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// 6.1 RESUBIR PDF (Vendedor/Supervisor cuando está observada o rechazada por supervisor)
+// ============================================
+router.post('/:id/resubir-pdf', authMiddleware, upload.single('pdf'), async (req, res) => {
+  const pool = req.app.get('db');
+  const io = req.app.get('io');
+  const { id } = req.params;
+  const { id: userId, role, name: userName } = req.user;
+  
+  console.log(`📎 Intento de resubir PDF para venta ${id} por usuario ${userId} (${role})`);
+  
+  try {
+    // Verificar que la venta existe
+    const [ventas] = await pool.query(`SELECT * FROM ventas_scoring WHERE id = ?`, [id]);
+    
+    if (ventas.length === 0) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+    
+    const venta = ventas[0];
+    
+    // Verificar que el usuario tiene acceso (vendedor o supervisor de esta venta)
+    const tieneAcceso = 
+      ROLES_VER_TODO.includes(role) ||
+      venta.vendedor_id === userId ||
+      venta.supervisor_id === userId;
+    
+    if (!tieneAcceso) {
+      return res.status(403).json({ error: 'No tenés permiso para modificar esta venta' });
+    }
+    
+    // Solo permitir resubir en estados observada o rechazada (por supervisor)
+    const estadosPermitidos = [ESTADOS.OBSERVADA, 'rechazada', ESTADOS.PENDIENTE_SUPERVISOR];
+    if (!estadosPermitidos.includes(venta.estado)) {
+      return res.status(400).json({ 
+        error: 'Solo se puede resubir documentación cuando la venta está observada o rechazada',
+        estado_actual: venta.estado
+      });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'Debe adjuntar un archivo PDF o imagen' });
+    }
+    
+    console.log('📎 Archivo recibido:', req.file.originalname);
+    
+    // Subir a Cloudinary
+    let pdfUrl = venta.pdf_url; // Mantener el anterior si falla
+    
+    if (cloudinary) {
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: 'scoring',
+          resource_type: 'auto',
+          public_id: `venta-${id}-resubido-${Date.now()}`,
+          access_mode: 'public',
+          timeout: 15000
+        });
+        pdfUrl = result.secure_url;
+        console.log('✅ Archivo subido a Cloudinary:', pdfUrl);
+      } catch (cloudinaryError) {
+        console.error('⚠️ Error subiendo a Cloudinary:', cloudinaryError.message);
+        return res.status(500).json({ error: 'Error al subir el archivo' });
+      }
+    } else {
+      return res.status(500).json({ error: 'Servicio de archivos no disponible' });
+    }
+    
+    // Limpiar archivo temporal
+    fs.unlink(req.file.path, () => {});
+    
+    // Actualizar la venta con el nuevo PDF
+    // Si estaba rechazada por supervisor, volver a pendiente_supervisor
+    let nuevoEstado = venta.estado;
+    if (venta.estado === 'rechazada' && !venta.scoring_user_id) {
+      // Fue rechazada por supervisor, volver a pendiente
+      nuevoEstado = ESTADOS.PENDIENTE_SUPERVISOR;
+    } else if (venta.estado === ESTADOS.OBSERVADA) {
+      // Mantener en observada pero marcar como corregida (scoring revisará)
+      nuevoEstado = ESTADOS.EN_PROCESO;
+    }
+    
+    await pool.query(`
+      UPDATE ventas_scoring 
+      SET pdf_url = ?,
+          estado = ?,
+          resuelta_at = ${venta.estado === ESTADOS.OBSERVADA ? 'NOW()' : 'resuelta_at'}
+      WHERE id = ?
+    `, [pdfUrl, nuevoEstado, id]);
+    
+    // Crear nota del cambio
+    await crearNota(
+      pool, id, userId, 'resubir_pdf', 
+      venta.estado, nuevoEstado, 
+      `Documentación resubida por ${userName}`
+    );
+    
+    // Crear mensaje interno
+    await crearMensajeInterno(
+      pool, id, userId, 
+      venta.scoring_user_id || venta.supervisor_id,
+      `Se resubió la documentación. Por favor revisar nuevamente.`,
+      'correccion'
+    );
+    
+    // Notificar por socket
+    if (io) {
+      // Notificar al scoring si existe
+      if (venta.scoring_user_id) {
+        io.to(`user_${venta.scoring_user_id}`).emit('scoring:alerta', {
+          tipo: 'pdf_resubido',
+          ventaId: id,
+          mensaje: `Se resubió documentación para venta #${id}`
+        });
+      }
+      
+      // Notificar al supervisor si corresponde
+      if (venta.supervisor_id && nuevoEstado === ESTADOS.PENDIENTE_SUPERVISOR) {
+        io.to(`user_${venta.supervisor_id}`).emit('scoring:alerta', {
+          tipo: 'venta_corregida',
+          ventaId: id,
+          mensaje: `Venta #${id} corregida, pendiente de autorización`
+        });
+      }
+      
+      io.emit('scoring:estado_cambiado', { 
+        ventaId: id, 
+        estadoAnterior: venta.estado, 
+        nuevoEstado 
+      });
+    }
+    
+    console.log(`✅ PDF resubido para venta ${id}, nuevo estado: ${nuevoEstado}`);
+    
+    res.json({ 
+      ok: true, 
+      mensaje: 'Documentación actualizada correctamente',
+      nuevoEstado,
+      pdfUrl
+    });
+    
+  } catch (error) {
+    console.error('❌ Error al resubir PDF:', error.message);
     res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
