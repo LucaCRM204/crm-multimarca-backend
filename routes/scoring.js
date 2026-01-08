@@ -251,6 +251,27 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
     const lead = leadRows[0];
     console.log('✅ Lead encontrado:', lead.nombre);
     
+    // VALIDACIÓN: Verificar que el lead pertenece al usuario (excepto roles superiores)
+    if (role === 'vendedor' && lead.assigned_to !== userId) {
+      return res.status(403).json({ 
+        error: 'No podés cargar ventas de leads que no te pertenecen',
+        detalle: 'Solo podés cargar ventas de tus propios leads.'
+      });
+    }
+    
+    // Supervisor solo puede cargar de sus vendedores o propios
+    if (role === 'supervisor') {
+      const [esSubordinado] = await pool.query(
+        'SELECT 1 FROM users WHERE id = ? AND reportsTo = ? LIMIT 1',
+        [lead.assigned_to, userId]
+      );
+      if (lead.assigned_to !== userId && esSubordinado.length === 0) {
+        return res.status(403).json({ 
+          error: 'No podés cargar ventas de leads que no pertenecen a tu equipo'
+        });
+      }
+    }
+    
     // Verificar que el lead no esté en estado protegido
     if ([ESTADOS_LEAD_PROTEGIDOS.RECHAZADO_SUPERVISOR, ESTADOS_LEAD_PROTEGIDOS.RECHAZADO_SCORING].includes(lead.estado)) {
       return res.status(400).json({ 
@@ -685,9 +706,12 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     const venta = ventas[0];
     const estadoActual = venta.estado;
     
+    // Jefe de scoring y owner pueden saltar transiciones
+    const puedeOmitirTransiciones = role === 'jefe_scoring' || role === 'owner';
+    
     // Verificar transición permitida
     const transicionesPermitidas = TRANSICIONES_PERMITIDAS[estadoActual] || [];
-    if (!transicionesPermitidas.includes(nuevo_estado)) {
+    if (!puedeOmitirTransiciones && !transicionesPermitidas.includes(nuevo_estado)) {
       return res.status(400).json({ 
         error: `No se puede pasar de "${estadoActual}" a "${nuevo_estado}"`,
         transiciones_permitidas: transicionesPermitidas
@@ -697,10 +721,13 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     // Verificar permisos
     let tienePermiso = false;
     
-    if (['asignada', 'en_proceso', 'observada', 'rechazada', 'pendiente_pago'].includes(nuevo_estado)) {
-      tienePermiso = ROLES_SCORING.includes(role) && (venta.scoring_user_id === userId || role === 'jefe_scoring' || role === 'owner');
+    // Jefe de scoring puede cambiar TODOS los estados
+    if (role === 'jefe_scoring' || role === 'owner') {
+      tienePermiso = true;
+    } else if (['asignada', 'en_proceso', 'observada', 'rechazada', 'pendiente_pago'].includes(nuevo_estado)) {
+      tienePermiso = ROLES_SCORING.includes(role) && (venta.scoring_user_id === userId);
     } else if (['seña', 'finalizada', 'cargada_concesionario'].includes(nuevo_estado)) {
-      tienePermiso = ROLES_COBRANZA.includes(role) || role === 'owner';
+      tienePermiso = ROLES_COBRANZA.includes(role);
     }
     
     if (!tienePermiso) {
