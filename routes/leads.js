@@ -1,11 +1,10 @@
 /**
  * ============================================
- * ROUTES/LEADS.JS - CON SISTEMA DE ACEPTACIÓN
+ * ROUTES/LEADS.JS - ASIGNACIÓN DIRECTA
  * ============================================
  * FEATURES:
  * - Estados protegidos (rechazado_supervisor, rechazado_scoring)
- * - Sistema de aceptación con timeout de 10 min
- * - Solo en horario laboral (9:30 - 19:30)
+ * - Asignación directa por round-robin según marca
  */
 
 const router = require('express').Router();
@@ -97,21 +96,6 @@ const canAssignToVendor = async (userId, userRole, targetVendorId) => {
 
   return false;
 };
-
-// ============================================
-// HELPER: Verificar horario laboral
-// ============================================
-function isWorkingHours() {
-  const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const startMinutes = 9 * 60 + 30; // 9:30
-  const endMinutes = 19 * 60 + 30;  // 19:30
-  
-  const dayOfWeek = now.getDay();
-  const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-  
-  return isWeekday && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-}
 
 // GET todos los leads
 router.get('/', authenticateToken, async (req, res) => {
@@ -335,84 +319,49 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
 
-    // ============================================
-    // SISTEMA DE ACEPTACIÓN
-    // ============================================
-    // Determinar si el vendedor está creando su propio lead
-    const isVendorCreatingOwnLead = req.user.role === 'vendedor' && finalAssignedTo === req.user.id;
-    
-    // No requiere aceptación si:
-    // - Es fuera de horario laboral
-    // - Es un lead del bot
-    // - El vendedor está creando su propio lead (auto-asignación)
-    const shouldRequireAcceptance = isWorkingHours() && !isFromBot && !isVendorCreatingOwnLead;
-    
-    let pendingAcceptance = false;
-    let acceptanceExpiresAt = null;
-    let currentOfferTo = null;
-    let assignedTo = finalAssignedTo;
+    // Asignación directa (sin sistema de aceptación)
+    const assignedTo = finalAssignedTo;
+    console.log(`📅 Lead asignado directamente a vendedor ${assignedTo || 'ninguno'}`);
 
-    if (shouldRequireAcceptance && finalAssignedTo) {
-      // En horario laboral y lead asignado a OTRO vendedor: requiere aceptación
-      pendingAcceptance = true;
-      acceptanceExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
-      currentOfferTo = finalAssignedTo;
-      assignedTo = null; // No asignar hasta que acepte
-      
-      console.log(`🕐 Lead requiere aceptación, ofrecido a ${finalAssignedTo}`);
-    } else {
-      // Asignación directa: fuera de horario, bot, o vendedor creando su propio lead
-      const reason = !isWorkingHours() ? 'fuera de horario' : isFromBot ? 'bot' : 'vendedor creó su propio lead';
-      console.log(`📅 Asignación directa (${reason})`);
-    }
-
-    // Crear el lead
+    // Crear el lead con asignación directa
     const [result] = await pool.execute(`
       INSERT INTO leads (
         nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, 
         assigned_to, infoUsado, entrega, fecha, created_at, created_by,
-        pending_acceptance, acceptance_expires_at, current_offer_to, assigned_at
+        pending_acceptance, assigned_at
       ) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ${assignedTo ? 'NOW()' : 'NULL'})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, FALSE, ${assignedTo ? 'NOW()' : 'NULL'})
     `, [
       nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, 
-      assignedTo, infoUsado, entrega, fecha, req.user.id,
-      pendingAcceptance, acceptanceExpiresAt, currentOfferTo
+      assignedTo, infoUsado, entrega, fecha, req.user.id
     ]);
 
     const leadId = result.insertId;
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [leadId]);
     const lead = rows[0];
 
-    // ============================================
-    // ENVIAR NOTIFICACIÓN SI REQUIERE ACEPTACIÓN
-    // ============================================
-    if (pendingAcceptance && io && currentOfferTo) {
-      // Notificación al vendedor
+    // Notificar al vendedor asignado
+    if (assignedTo && io) {
       const sockets = require('../socket-server');
       if (sockets && sockets.emitToUser) {
-        sockets.emitToUser(io, currentOfferTo, 'lead:offer', {
+        sockets.emitToUser(io, assignedTo, 'notification', {
+          type: 'lead_assigned',
+          title: '🔔 NUEVO LEAD ASIGNADO',
+          message: `Se te asignó un nuevo lead: ${nombre}`,
           leadId: lead.id,
-          expiresAt: acceptanceExpiresAt.toISOString(),
-          timeoutMinutes: 10,
-          message: '🔔 NUEVO LEAD DISPONIBLE',
+          sound: true,
           timestamp: new Date().toISOString()
         });
 
-        sockets.emitToUser(io, currentOfferTo, 'notification', {
-          type: 'lead_offer',
-          title: '🔔 NUEVO LEAD DISPONIBLE',
-          message: 'Tenés 10 minutos para aceptar',
-          leadId: lead.id,
-          expiresAt: acceptanceExpiresAt.toISOString(),
-          requiresAction: true,
-          sound: true,
+        io.emit('lead:assigned', {
+          lead: lead,
+          vendedorId: assignedTo,
           timestamp: new Date().toISOString()
         });
       }
     }
     
-    console.log('✅ Lead creado:', leadId, pendingAcceptance ? '(pendiente aceptación)' : '(asignado directo)');
+    console.log('✅ Lead creado:', leadId, assignedTo ? `(asignado a ${assignedTo})` : '(sin asignar)');
     
     res.json({ ok: true, lead: mapLead(lead) });
   } catch (error) {
