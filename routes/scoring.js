@@ -34,6 +34,74 @@ try {
   console.log('⚠️ Error configurando Cloudinary:', err.message);
 }
 
+// ============================================
+// HELPER: Comprimir PDF con Ghostscript
+// ============================================
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
+
+async function comprimirPDF(inputPath, maxSizeMB = 9) {
+  const stats = fs.statSync(inputPath);
+  const fileSizeMB = stats.size / (1024 * 1024);
+  
+  console.log(`📊 Tamaño original del PDF: ${fileSizeMB.toFixed(2)} MB`);
+  
+  // Si ya es menor al límite, no comprimir
+  if (fileSizeMB <= maxSizeMB) {
+    console.log('✅ PDF dentro del límite, no requiere compresión');
+    return inputPath;
+  }
+  
+  const outputPath = inputPath.replace(/\.[^.]+$/, '-compressed.pdf');
+  
+  // Niveles de compresión de Ghostscript (de mayor a menor calidad)
+  const qualitySettings = [
+    '/ebook',      // ~150 dpi - buena calidad, buen tamaño
+    '/screen',     // ~72 dpi - menor calidad, archivo pequeño
+  ];
+  
+  for (const quality of qualitySettings) {
+    try {
+      console.log(`🔄 Intentando comprimir con calidad: ${quality}`);
+      
+      const gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=${quality} -dNOPAUSE -dQUIET -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
+      
+      await execPromise(gsCommand, { timeout: 60000 });
+      
+      // Verificar tamaño resultante
+      if (fs.existsSync(outputPath)) {
+        const compressedStats = fs.statSync(outputPath);
+        const compressedSizeMB = compressedStats.size / (1024 * 1024);
+        
+        console.log(`📊 Tamaño comprimido: ${compressedSizeMB.toFixed(2)} MB (calidad: ${quality})`);
+        
+        if (compressedSizeMB <= maxSizeMB) {
+          // Eliminar original y retornar comprimido
+          fs.unlinkSync(inputPath);
+          return outputPath;
+        }
+      }
+    } catch (err) {
+      console.error(`⚠️ Error comprimiendo con ${quality}:`, err.message);
+    }
+  }
+  
+  // Si ninguna compresión funcionó, verificar si el comprimido es al menos más pequeño
+  if (fs.existsSync(outputPath)) {
+    const compressedStats = fs.statSync(outputPath);
+    if (compressedStats.size < stats.size) {
+      fs.unlinkSync(inputPath);
+      console.log('⚠️ PDF comprimido pero aún excede el límite');
+      return outputPath;
+    }
+    fs.unlinkSync(outputPath);
+  }
+  
+  console.log('⚠️ No se pudo comprimir suficientemente el PDF');
+  return inputPath; // Retornar original si no se pudo comprimir
+}
+
 // Configuración de multer para subir PDFs
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -303,25 +371,38 @@ router.post('/', authMiddleware, upload.single('pdf'), async (req, res) => {
       
       if (cloudinary) {
         try {
-          const result = await cloudinary.uploader.upload(req.file.path, {
+          // Comprimir PDF si es necesario (límite 9MB para dejar margen)
+          let filePath = req.file.path;
+          if (req.file.mimetype === 'application/pdf') {
+            filePath = await comprimirPDF(req.file.path, 9);
+          }
+          
+          const result = await cloudinary.uploader.upload(filePath, {
             folder: 'scoring',
             resource_type: 'auto',
             public_id: `venta-${Date.now()}`,
             access_mode: 'public',  // CORREGIDO: Permite acceso público a PDFs
-            timeout: 15000
+            timeout: 30000
           });
           pdfUrl = result.secure_url;
           console.log('✅ Archivo subido a Cloudinary:', pdfUrl);
+          
+          // Limpiar archivo (puede ser el original o el comprimido)
+          fs.unlink(filePath, () => {});
+          if (filePath !== req.file.path && fs.existsSync(req.file.path)) {
+            fs.unlink(req.file.path, () => {});
+          }
         } catch (cloudinaryError) {
           console.error('⚠️ Error subiendo a Cloudinary:', cloudinaryError.message);
+          // Limpiar archivo temporal
+          fs.unlink(req.file.path, () => {});
           // Continuar sin el archivo
         }
       } else {
         console.log('⚠️ Cloudinary no configurado, archivo no se guardará');
+        // Limpiar archivo temporal
+        fs.unlink(req.file.path, () => {});
       }
-      
-      // Limpiar archivo temporal
-      fs.unlink(req.file.path, () => {});
     }
     
     // Crear la venta
@@ -908,25 +989,36 @@ router.post('/:id/resubir-pdf', authMiddleware, upload.single('pdf'), async (req
     
     if (cloudinary) {
       try {
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        // Comprimir PDF si es necesario (límite 9MB para dejar margen)
+        let filePath = req.file.path;
+        if (req.file.mimetype === 'application/pdf') {
+          filePath = await comprimirPDF(req.file.path, 9);
+        }
+        
+        const result = await cloudinary.uploader.upload(filePath, {
           folder: 'scoring',
           resource_type: 'auto',
           public_id: `venta-${id}-resubido-${Date.now()}`,
           access_mode: 'public',
-          timeout: 15000
+          timeout: 30000
         });
         pdfUrl = result.secure_url;
         console.log('✅ Archivo subido a Cloudinary:', pdfUrl);
+        
+        // Limpiar archivos temporales
+        fs.unlink(filePath, () => {});
+        if (filePath !== req.file.path && fs.existsSync(req.file.path)) {
+          fs.unlink(req.file.path, () => {});
+        }
       } catch (cloudinaryError) {
         console.error('⚠️ Error subiendo a Cloudinary:', cloudinaryError.message);
-        return res.status(500).json({ error: 'Error al subir el archivo' });
+        fs.unlink(req.file.path, () => {});
+        return res.status(500).json({ error: 'Error al subir el archivo. Si el archivo es muy grande, intente escanearlo con menor resolución.' });
       }
     } else {
+      fs.unlink(req.file.path, () => {});
       return res.status(500).json({ error: 'Servicio de archivos no disponible' });
     }
-    
-    // Limpiar archivo temporal
-    fs.unlink(req.file.path, () => {});
     
     // Actualizar la venta con el nuevo PDF
     // Si estaba rechazada por supervisor, volver a pendiente_supervisor
@@ -1007,7 +1099,8 @@ router.post('/:id/resubir-pdf', authMiddleware, upload.single('pdf'), async (req
 // ============================================
 // 7. ENVIAR MENSAJE INTERNO (Supervisor/Vendedor responde a Scoring)
 // ============================================
-router.post('/:id/mensaje', authMiddleware, async (req, res) => {
+// Acepta tanto /mensaje como /mensajes (singular y plural)
+router.post('/:id/mensaje(s)?', authMiddleware, async (req, res) => {
   const pool = req.app.get('db');
   const io = req.app.get('io');
   const { id } = req.params;

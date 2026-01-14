@@ -26,11 +26,14 @@ try {
 const ESTADOS_PROTEGIDOS = ['rechazado_supervisor', 'rechazado_scoring'];
 
 function validarCambioEstadoLead(estadoActual, nuevoEstado, role, esAutomatico = false) {
+  // Owner y gerente pueden modificar cualquier estado
+  const ROLES_SUPER = ['owner', 'gerente', 'director'];
+  
   if (ESTADOS_PROTEGIDOS.includes(estadoActual)) {
-    if (role !== 'owner') {
+    if (!ROLES_SUPER.includes(role)) {
       return {
         permitido: false,
-        error: `El estado "${estadoActual}" es final y solo puede ser modificado por el Owner del sistema.`
+        error: `El estado "${estadoActual}" es final y solo puede ser modificado por el Owner, Director o Gerente.`
       };
     }
   }
@@ -606,14 +609,19 @@ router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
+    
+    console.log(`📝 PUT /leads/${id} - Usuario: ${req.user.id} (${req.user.role})`);
+    console.log(`📝 Updates recibidos:`, JSON.stringify(updates));
 
     const [currentLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
     
     if (currentLead.length === 0) {
+      console.log(`❌ Lead ${id} no encontrado`);
       return res.status(404).json({ error: 'Lead no encontrado' });
     }
     
     const leadActual = currentLead[0];
+    console.log(`📋 Estado actual del lead: ${leadActual.estado}`);
 
     // Validar estados protegidos
     if (updates.estado && updates.estado !== leadActual.estado) {
@@ -629,7 +637,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       }
     }
 
-    if (ESTADOS_PROTEGIDOS.includes(leadActual.estado) && req.user.role !== 'owner') {
+    if (ESTADOS_PROTEGIDOS.includes(leadActual.estado) && !['owner', 'gerente', 'director'].includes(req.user.role)) {
       return res.status(403).json({ 
         error: `Este lead está en estado "${leadActual.estado}" y no puede ser modificado.`
       });
@@ -692,9 +700,10 @@ router.put('/:id', authenticateToken, async (req, res) => {
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    console.log(`✅ Lead ${id} actualizado correctamente. Nuevo estado: ${rows[0].estado}`);
     res.json({ ok: true, lead: mapLead(rows[0]) });
   } catch (error) {
-    console.error('Error PUT /leads/:id:', error);
+    console.error('❌ Error PUT /leads/:id:', error);
     res.status(500).json({ error: 'Error al actualizar lead' });
   }
 });
