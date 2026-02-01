@@ -33,6 +33,17 @@ const VENDEDORES_FAVIER_SHEETS = [
   { id: 223, name: 'Brian Vendedor' }
 ];
 
+// ========= USUARIOS CONTENEDOR POR PROVEEDOR =========
+const USUARIOS_PROVEEDORES = {
+  // GALLARDO VW
+  emanuelAres: { id: 299, name: 'Leads Emanuel Ares', marca: 'vw' },
+  emanuelMartinez: { id: 300, name: 'Leads Emanuel Martinez', marca: 'vw' },
+  fastLeadsNigro: { id: 301, name: 'Leads Fast Leads Nigro', marca: 'vw' },
+  // MITRE FIAT
+  fastLeadsSebastian: { id: 302, name: 'Leads Fast Leads Sebastian', marca: 'fiat' },
+  gleCarlos: { id: 303, name: 'Leads GLE Carlos', marca: 'fiat' }
+};
+
 // ========= Helpers de limpieza / normalización =========
 
 function stripLabel(v) {
@@ -743,6 +754,270 @@ router.get('/equipos/status', async (req, res) => {
   }
 });
 
+// =====================================================================
+// WEBHOOKS - PROVEEDORES CON USUARIO CONTENEDOR (SIN ROUND ROBIN)
+// =====================================================================
+
+// ========= Webhook: Emanuel Ares (Gallardo Ares) =========
+router.post('/emanuel-ares', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-emanuel-ares-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('📩 Webhook Emanuel Ares recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.emanuelAres;
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        (notas || ''),
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ Emanuel Ares: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'Emanuel'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Emanuel Ares:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Emanuel Martinez (Gallardo Martinez) =========
+router.post('/emanuel-martinez', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-emanuel-martinez-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('📩 Webhook Emanuel Martinez recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.emanuelMartinez;
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        (notas || ''),
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ Emanuel Martinez: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'Emanuel'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Emanuel Martinez:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Fast Leads Nigro (Gallardo Nigro) =========
+router.post('/fastleads-nigro', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-fastleads-nigro-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('📩 Webhook Fast Leads Nigro recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.fastLeadsNigro;
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Fast Leads', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        (notas || ''),
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ Fast Leads Nigro: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'Fast Leads'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Fast Leads Nigro:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Fast Leads Sebastian (Mitre Sebastian) =========
+router.post('/fastleads-sebastian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-fastleads-sebastian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('📩 Webhook Fast Leads Sebastian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.fastLeadsSebastian;
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Fast Leads', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        (notas || ''),
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ Fast Leads Sebastian: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'Fast Leads'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Fast Leads Sebastian:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: GLE Leads Carlos (Mitre Carlos) =========
+router.post('/gle-carlos', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-gle-carlos-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('📩 Webhook GLE Carlos recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.gleCarlos;
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'GLE Leads', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        (notas || ''),
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ GLE Carlos: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'GLE Leads'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook GLE Carlos:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
@@ -758,7 +1033,8 @@ router.get('/health', (req, res) => {
       lucianoDP: lucianoDPSheetsIndex,
       favier: favierSheetsIndex
     },
-    vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name)
+    vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
+    usuariosProveedores: Object.values(USUARIOS_PROVEEDORES).map(u => u.name)
   });
 });
 
