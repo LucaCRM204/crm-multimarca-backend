@@ -41,7 +41,8 @@ const USUARIOS_PROVEEDORES = {
   fastLeadsNigro: { id: 301, name: 'Leads Fast Leads Nigro', marca: 'vw' },
   // MITRE FIAT
   fastLeadsSebastian: { id: 302, name: 'Leads Fast Leads Sebastian', marca: 'fiat' },
-  gleCarlos: { id: 303, name: 'Leads GLE Carlos', marca: 'fiat' }
+  gleCarlos: { id: 303, name: 'Leads GLE Carlos', marca: 'fiat' },
+  planesOficialesBrian: { id: 312, name: 'Leads Planes Oficiales Brian', marca: 'fiat' }
 };
 
 // ========= Helpers de limpieza / normalización =========
@@ -1014,6 +1015,67 @@ router.post('/gle-carlos', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error webhook GLE Carlos:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Planes Oficiales Brian (Mitre Brian) =========
+router.post('/planes-oficiales-brian', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-planes-oficiales-brian-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, telefono2, modelo, email, provincia, campana, mensaje } = req.body;
+
+    console.log('📩 Webhook Planes Oficiales Brian recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const usuario = USUARIOS_PROVEEDORES.planesOficialesBrian;
+
+    // Construir notas con datos adicionales
+    let notasArr = [];
+    if (email) notasArr.push('Email: ' + email);
+    if (telefono2) notasArr.push('Tel2: ' + telefono2);
+    if (provincia) notasArr.push('Provincia: ' + provincia);
+    if (campana) notasArr.push('Campaña: ' + campana);
+    if (mensaje) notasArr.push('Mensaje: ' + mensaje);
+    const notas = notasArr.join(' | ');
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Planes Oficiales', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        usuario.marca,
+        notas,
+        usuario.id
+      ]
+    );
+
+    console.log(`✅ Planes Oficiales Brian: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+
+    res.json({
+      ok: true,
+      message: `Lead asignado a ${usuario.name}`,
+      assignedTo: usuario.id,
+      vendedor: usuario.name,
+      fuente: 'Planes Oficiales'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Planes Oficiales Brian:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
