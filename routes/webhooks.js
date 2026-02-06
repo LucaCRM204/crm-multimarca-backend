@@ -41,7 +41,7 @@ const USUARIOS_PROVEEDORES = {
   fastLeadsNigro: { id: 301, name: 'Leads Fast Leads Nigro', marca: 'vw' },
   // MITRE FIAT
   fastLeadsSebastian: { id: 302, name: 'Leads Fast Leads Sebastian', marca: 'fiat' },
-  gleCarlos: { id: 303, name: 'Leads GLE Carlos', marca: 'fiat' },
+  fastleadIpperi: { id: 303, name: 'Leads Fast Leads Ipperi', marca: 'fiat' },
   planesOficialesBrian: { id: 312, name: 'Leads Planes Oficiales Brian', marca: 'fiat' }
 };
 
@@ -967,17 +967,17 @@ router.post('/fastleads-sebastian', async (req, res) => {
   }
 });
 
-// ========= Webhook: GLE Leads Carlos (Mitre Carlos) =========
-router.post('/gle-carlos', async (req, res) => {
+// ========= Webhook: Fast Leads Ipperi (Mitre Ipperi) =========
+router.post('/fastlead-ipperi', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
-    if (sheetKey !== 'goldplan-gle-carlos-2024') {
+    if (sheetKey !== 'goldplan-fastlead-ipperi-2024') {
       return res.status(401).json({ error: 'No autorizado' });
     }
 
     const { nombre, telefono, modelo, notas } = req.body;
 
-    console.log('📩 Webhook GLE Carlos recibido:', JSON.stringify(req.body, null, 2));
+    console.log('📩 Webhook FastLead Ipperi recibido:', JSON.stringify(req.body, null, 2));
 
     if (!nombre || !telefono) {
       return res.status(400).json({ 
@@ -986,13 +986,13 @@ router.post('/gle-carlos', async (req, res) => {
       });
     }
 
-    const usuario = USUARIOS_PROVEEDORES.gleCarlos;
+    const usuario = USUARIOS_PROVEEDORES.fastleadIpperi;
 
     await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'Consultar', 'nuevo', 'GLE Leads', ?, ?, NOW())`,
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Fast Leads', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -1003,18 +1003,18 @@ router.post('/gle-carlos', async (req, res) => {
       ]
     );
 
-    console.log(`✅ GLE Carlos: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+    console.log(`✅ FastLead Ipperi: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
     res.json({
       ok: true,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
-      fuente: 'GLE Leads'
+      fuente: 'Fast Leads'
     });
 
   } catch (error) {
-    console.error('❌ Error webhook GLE Carlos:', error);
+    console.error('❌ Error webhook FastLead Ipperi:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
