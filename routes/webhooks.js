@@ -12,6 +12,7 @@ let brianDPSheetsIndex = 0;
 let sebastianDPSheetsIndex = 0;
 let lucianoDPSheetsIndex = 0;
 let favierSheetsIndex = 0; // NUEVO: índice para Favier
+let paginaGoldplanIndex = 0; // índice para leads de la página web
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -42,8 +43,12 @@ const USUARIOS_PROVEEDORES = {
   // MITRE FIAT
   fastLeadsSebastian: { id: 302, name: 'Leads Fast Leads Sebastian', marca: 'fiat' },
   fastleadIpperi: { id: 303, name: 'Leads Fast Leads Ipperi', marca: 'fiat' },
-  planesOficialesBrian: { id: 312, name: 'Leads Planes Oficiales Brian', marca: 'fiat' }
+  planesOficialesBrian: { id: 312, name: 'Leads Planes Oficiales Brian', marca: 'fiat' },
+  planesOficialesSebastian: { id: 335, name: 'Leads Planes Oficiales Sebastian', marca: 'fiat' }
 };
+
+// ========= Contador cíclico Planes Oficiales (6 Brian, 1 Sebastian cada 7) =========
+let planesOficialesCounter = 0;
 
 // ========= Helpers de limpieza / normalización =========
 
@@ -1019,7 +1024,7 @@ router.post('/fastlead-ipperi', async (req, res) => {
   }
 });
 
-// ========= Webhook: Planes Oficiales Brian (Mitre Brian) =========
+// ========= Webhook: Planes Oficiales (Mitre - distribución 6 Brian / 1 Sebastian) =========
 router.post('/planes-oficiales-brian', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
@@ -1029,7 +1034,7 @@ router.post('/planes-oficiales-brian', async (req, res) => {
 
     const { nombre, telefono, telefono2, modelo, email, provincia, campana, mensaje } = req.body;
 
-    console.log('📩 Webhook Planes Oficiales Brian recibido:', JSON.stringify(req.body, null, 2));
+    console.log('📩 Webhook Planes Oficiales recibido:', JSON.stringify(req.body, null, 2));
 
     if (!nombre || !telefono) {
       return res.status(400).json({ 
@@ -1038,7 +1043,15 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       });
     }
 
-    const usuario = USUARIOS_PROVEEDORES.planesOficialesBrian;
+    // Distribución cíclica: cada 7 leads, 6 van a Brian y 1 va a Sebastian
+    // Patrón: B B B B B B S  B B B B B B S  ...
+    const esSebastian = (planesOficialesCounter % 7 === 6);
+    const usuario = esSebastian 
+      ? USUARIOS_PROVEEDORES.planesOficialesSebastian 
+      : USUARIOS_PROVEEDORES.planesOficialesBrian;
+    
+    planesOficialesCounter++;
+    console.log(`📊 Planes Oficiales contador: ${planesOficialesCounter} → ${usuario.name} (${esSebastian ? 'Sebastian 1/7' : 'Brian 6/7'})`);
 
     // Construir notas con datos adicionales
     let notasArr = [];
@@ -1064,18 +1077,83 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       ]
     );
 
-    console.log(`✅ Planes Oficiales Brian: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+    console.log(`✅ Planes Oficiales: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
     res.json({
       ok: true,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
-      fuente: 'Planes Oficiales'
+      fuente: 'Planes Oficiales',
+      distribucion: esSebastian ? 'Sebastian (1/7)' : 'Brian (6/7)',
+      contadorActual: planesOficialesCounter
     });
 
   } catch (error) {
-    console.error('❌ Error webhook Planes Oficiales Brian:', error);
+    console.error('❌ Error webhook Planes Oficiales:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Página GoldPlan (formulario web público) =========
+router.post('/pagina-goldplan', async (req, res) => {
+  try {
+    const { nombre, telefono, modelo, notas } = req.body;
+
+    console.log('🌐 Webhook Página GoldPlan recibido:', JSON.stringify(req.body, null, 2));
+
+    // Validaciones
+    if (!nombre || !telefono) {
+      return res.status(400).json({ 
+        error: 'Nombre y teléfono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Limpiar teléfono
+    const telefonoLimpio = normalizePhone(telefono);
+    if (!telefonoLimpio || telefonoLimpio.length < 8) {
+      return res.status(400).json({ error: 'Teléfono inválido' });
+    }
+
+    // Detectar marca del modelo seleccionado
+    const marca = detectMarca(modelo) || 'vw';
+
+    // Round-robin con vendedores Favier
+    const vendedor = VENDEDORES_FAVIER_SHEETS[paginaGoldplanIndex];
+    paginaGoldplanIndex = (paginaGoldplanIndex + 1) % VENDEDORES_FAVIER_SHEETS.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`🌐 Página GoldPlan: Asignado a ${vendedor.name} (ID: ${assigned_to}), marca: ${marca}`);
+
+    await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Plan de ahorro', 'nuevo', 'Pagina GoldPlan', ?, ?, NOW())`,
+      [
+        cleanText(nombre),
+        telefonoLimpio,
+        cleanText(modelo) || 'Consultar',
+        marca,
+        cleanText(notas) || '',
+        assigned_to
+      ]
+    );
+
+    console.log(`✅ Página GoldPlan: Lead creado, asignado a ${vendedor.name}`);
+
+    res.json({
+      ok: true,
+      message: `Lead recibido correctamente`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      fuente: 'Pagina GoldPlan'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Página GoldPlan:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
@@ -1093,7 +1171,9 @@ router.get('/health', (req, res) => {
       brianDP: brianDPSheetsIndex,
       sebastianDP: sebastianDPSheetsIndex,
       lucianoDP: lucianoDPSheetsIndex,
-      favier: favierSheetsIndex
+      favier: favierSheetsIndex,
+      paginaGoldplan: paginaGoldplanIndex,
+      planesOficiales: planesOficialesCounter
     },
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
     usuariosProveedores: Object.values(USUARIOS_PROVEEDORES).map(u => u.name)
