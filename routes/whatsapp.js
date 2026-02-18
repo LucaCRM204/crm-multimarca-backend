@@ -7,7 +7,10 @@
  */
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const authModule = require('../middleware/auth');
+const authMiddleware = typeof authModule === 'function' 
+  ? authModule 
+  : (authModule.authMiddleware || authModule.authenticateToken || authModule.default);
 
 // Stage definitions
 const STAGES = {
