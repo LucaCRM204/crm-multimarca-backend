@@ -7,10 +7,7 @@
  */
 const express = require('express');
 const router = express.Router();
-const authModule = require('../middleware/auth');
-const authMiddleware = typeof authModule === 'function' 
-  ? authModule 
-  : (authModule.authMiddleware || authModule.authenticateToken || authModule.default);
+const { authenticateToken } = require('../middleware/auth');
 
 // Stage definitions
 const STAGES = {
@@ -101,7 +98,7 @@ module.exports = function(pool) {
   // ==================== CONVERSATIONS ====================
 
   // List all conversations
-  router.get('/conversations', authMiddleware, async (req, res) => {
+  router.get('/conversations', authenticateToken, async (req, res) => {
     try {
       const { stage, search, assigned } = req.query;
       let sql = `
@@ -152,7 +149,7 @@ module.exports = function(pool) {
   });
 
   // Get single conversation with messages + timeline
-  router.get('/conversations/:id', authMiddleware, async (req, res) => {
+  router.get('/conversations/:id', authenticateToken, async (req, res) => {
     try {
       const { id } = req.params;
 
@@ -184,7 +181,7 @@ module.exports = function(pool) {
   });
 
   // Send message from CRM (human agent)
-  router.post('/conversations/:id/send', authMiddleware, async (req, res) => {
+  router.post('/conversations/:id/send', authenticateToken, async (req, res) => {
     try {
       const { id } = req.params;
       const { message } = req.body;
@@ -235,7 +232,7 @@ module.exports = function(pool) {
   });
 
   // Update stage
-  router.put('/conversations/:id/stage', authMiddleware, async (req, res) => {
+  router.put('/conversations/:id/stage', authenticateToken, async (req, res) => {
     try {
       const { id } = req.params;
       const { stage, note } = req.body;
@@ -267,7 +264,7 @@ module.exports = function(pool) {
   });
 
   // Assign conversation
-  router.put('/conversations/:id/assign', authMiddleware, async (req, res) => {
+  router.put('/conversations/:id/assign', authenticateToken, async (req, res) => {
     try {
       const { id } = req.params;
       const { userId } = req.body;
@@ -283,7 +280,7 @@ module.exports = function(pool) {
   });
 
   // Toggle bot
-  router.put('/conversations/:id/bot', authMiddleware, async (req, res) => {
+  router.put('/conversations/:id/bot', authenticateToken, async (req, res) => {
     try {
       const { id } = req.params;
       const { enabled } = req.body;
@@ -391,7 +388,7 @@ module.exports = function(pool) {
   });
 
   // Stats
-  router.get('/stats', authMiddleware, async (req, res) => {
+  router.get('/stats', authenticateToken, async (req, res) => {
     try {
       const [byStage] = await pool.query(`
         SELECT stage, COUNT(*) as count FROM wa_conversations
