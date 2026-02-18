@@ -25,6 +25,7 @@ const leadsRouter = require('./routes/leads');
 const activityRouter = require('./routes/activity');
 const scoringRouter = require('./routes/scoring');
 const metasRouter = require('./routes/metas'); // ← NUEVO: Metas
+const whatsappRouter = require('./routes/whatsapp'); // ← WhatsApp Chat
 
 let usersRouter;
 try { 
@@ -71,6 +72,7 @@ app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/activity', activityRouter);
 app.use('/api/scoring', scoringRouter);
 app.use('/api/metas', metasRouter(pool)); // ← NUEVO: Rutas de metas
+app.use('/api/whatsapp', whatsappRouter(pool)); // ← WhatsApp Chat
 if (usersRouter) app.use('/api/users', usersRouter);
 
 // Health check
@@ -80,7 +82,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOS
 app.get('/', (_req, res) => res.json({ 
   message: 'Alluma CRM Backend API', 
   version: '2.2.0',
-  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring', 'metas']
+  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring', 'metas', 'whatsapp-chat']
 }));
 
 // Inicializar WebSockets
@@ -94,5 +96,6 @@ server.listen(PORT, () => {
   console.log(`⚡ WebSockets habilitados`);
   console.log(`📊 Reportes de actividad disponibles`);
   console.log(`📋 Módulo de Scoring activo`);
-  console.log(`🎯 Módulo de Metas activo\n`);
+  console.log(`🎯 Módulo de Metas activo`);
+  console.log(`💬 WhatsApp Chat activo\n`);
 });
