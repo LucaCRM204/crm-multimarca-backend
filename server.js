@@ -66,8 +66,76 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Rutas principales
 app.use('/api/auth', authRouter);
+
+// Middleware: auto-emit socket events on lead changes
+app.use('/api/leads', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  
+  const originalJson = res.json.bind(res);
+  
+  res.json = function(data) {
+    const io = req.app.get('io');
+    if (!io) return originalJson(data);
+
+    try {
+      // POST /api/leads (solo creación, no búsqueda)
+      if (req.method === 'POST' && req.path === '/' && data?.lead && !data?.leads) {
+        io.emit('lead:created', data.lead);
+        console.log(`📡 [RT] lead:created #${data.lead.id}`);
+      }
+      
+      // PUT/PATCH → lead:updated
+      if ((req.method === 'PUT' || req.method === 'PATCH') && data?.lead) {
+        io.emit('lead:updated', data.lead);
+        console.log(`📡 [RT] lead:updated #${data.lead.id} (${req.method} ${req.path})`);
+      }
+
+      // DELETE → lead:deleted
+      if (req.method === 'DELETE' && req.path.match(/^\/\d+$/)) {
+        const leadId = parseInt(req.path.replace('/', ''));
+        io.emit('lead:deleted', leadId);
+        console.log(`📡 [RT] lead:deleted #${leadId}`);
+      }
+
+      // Notificación al asignado
+      if (req.method === 'POST' && data?.lead?.assigned_to) {
+        io.emit('notification', {
+          id: `lead-${data.lead.id}-${Date.now()}`,
+          type: 'lead_created',
+          title: 'Nuevo lead asignado',
+          message: `${data.lead.nombre || 'Lead nuevo'} - ${data.lead.modelo || 'Sin modelo'}`,
+          timestamp: new Date().toISOString(),
+          read: false,
+          severity: 'info',
+          leadId: data.lead.id,
+          targetUserId: data.lead.assigned_to
+        });
+      }
+    } catch (err) {
+      console.error('Socket emit error:', err.message);
+    }
+
+    return originalJson(data);
+  };
+
+  next();
+});
+
 app.use('/api/leads', leadsRouter);
 app.use('/api/presupuestos', require('./routes/presupuestos'));
+// Middleware: auto-emit on webhook lead creation
+app.use('/api/webhooks', (req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = function(data) {
+    const io = req.app.get('io');
+    if (io && req.method === 'POST' && data?.lead) {
+      io.emit('lead:created', data.lead);
+      console.log(`📡 [RT] lead:created via webhook #${data.lead.id}`);
+    }
+    return originalJson(data);
+  };
+  next();
+});
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/activity', activityRouter);
 app.use('/api/scoring', scoringRouter);
