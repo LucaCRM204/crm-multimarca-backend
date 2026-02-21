@@ -45,7 +45,7 @@ function isWorkingHours() {
 function initSocketServer(httpServer, pool) {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.CORS_ORIGIN?.split(',').map(s => s.trim()) || ['http://localhost:5173', 'http://localhost:3000'],
+      origin: true,
       methods: ['GET', 'POST'],
       credentials: true
     },
@@ -85,17 +85,17 @@ function initSocketServer(httpServer, pool) {
     
     socket.on('lead:created', (lead) => {
       console.log(`📥 Nuevo lead creado: ${lead.nombre}`);
-      socket.broadcast.emit('lead:new', lead);
+      socket.broadcast.emit('lead:created', lead);
     });
 
     socket.on('lead:updated', (lead) => {
       console.log(`📝 Lead actualizado: ${lead.nombre} (ID: ${lead.id})`);
-      socket.broadcast.emit('lead:changed', lead);
+      socket.broadcast.emit('lead:updated', lead);
     });
 
     socket.on('lead:deleted', (leadId) => {
       console.log(`🗑️ Lead eliminado: ID ${leadId}`);
-      socket.broadcast.emit('lead:removed', leadId);
+      socket.broadcast.emit('lead:deleted', leadId);
     });
 
     // ===== NUEVO: ACEPTAR LEAD =====
@@ -267,7 +267,7 @@ async function handleLeadAcceptance(io, pool, leadId, userId, action) {
         timestamp: new Date().toISOString()
       });
 
-      io.emit('lead:changed', updatedLead);
+      io.emit('lead:updated', updatedLead);
 
       console.log(`✅ Lead ${leadId} aceptado por vendedor ${userId}`);
 
@@ -506,6 +506,10 @@ async function handleUserConnect(socket, io, pool) {
 
   socket.emit('presence:users_list', getOnlineUsers());
 
+  // Emit users:online for useRealtime compatibility
+  const onlineIds = Array.from(userSessions.keys());
+  io.emit('users:online', onlineIds);
+
   // Verificar si hay leads pendientes de aceptación para este usuario
   if (pool) {
     try {
@@ -554,6 +558,10 @@ async function handleUserDisconnect(socket, io, pool) {
         odUserName: userName,
         disconnectedAt: new Date().toISOString()
       });
+
+      // Emit users:online for useRealtime compatibility
+      const onlineIds = Array.from(userSessions.keys());
+      io.emit('users:online', onlineIds);
 
       logActivity(userId, 'disconnected', {});
     }
