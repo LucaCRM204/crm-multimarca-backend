@@ -10,10 +10,16 @@
 const express = require('express');
 const router = express.Router();
 
+function getPool(req) {
+  const p = req.app.get('db');
+  if (p) return p;
+  try { return require('../db'); } catch(e) { return null; }
+}
+
 // GET /api/distribution/all — un solo call, trae todos los supervisores con vendedores
 router.get('/all', async (req, res) => {
   try {
-    const pool = req.app.get('db');
+    const pool = getPool(req);
     
     const [vendors] = await pool.execute(`
       SELECT 
@@ -80,7 +86,7 @@ router.get('/all', async (req, res) => {
 // GET /api/distribution/:supervisorId
 router.get('/:supervisorId', async (req, res) => {
   try {
-    const pool = req.app.get('db');
+    const pool = getPool(req);
     const supId = parseInt(req.params.supervisorId);
     
     const [vendors] = await pool.execute(
@@ -101,7 +107,7 @@ router.get('/:supervisorId', async (req, res) => {
 // PUT /api/distribution
 router.put('/', async (req, res) => {
   try {
-    const pool = req.app.get('db');
+    const pool = getPool(req);
     const { distributions } = req.body;
     
     if (!distributions || !Array.isArray(distributions)) {
