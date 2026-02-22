@@ -142,6 +142,7 @@ app.use('/api/scoring', scoringRouter);
 app.use('/api/metas', metasRouter(pool)); // ← NUEVO: Rutas de metas
 app.use('/api/whatsapp', whatsappRouter(pool)); // ← WhatsApp Chat
 app.use('/api/distribution', require('./routes/distribution')); // ← Distribución de leads
+app.use('/api/calls', require('./routes/calls')); // ← Registro de llamadas
 if (usersRouter) app.use('/api/users', usersRouter);
 
 // Health check
