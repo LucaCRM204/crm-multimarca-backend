@@ -314,7 +314,49 @@ router.post('/', authenticateToken, async (req, res) => {
         finalAssignedTo = req.user.id;
       } else {
         try {
-          finalAssignedTo = await getAssignedVendorByBrand(marca);
+          // Intentar distribución por porcentaje primero
+          const [vendedoresConPct] = await pool.execute(`
+            SELECT u.id, u.name, u.lead_percentage
+            FROM users u
+            WHERE u.role = 'vendedor' 
+            AND u.active = 1
+            AND u.lead_percentage > 0
+            ORDER BY u.id
+          `);
+          
+          if (vendedoresConPct.length > 0) {
+            // Algoritmo de déficit
+            const vendorIds = vendedoresConPct.map(v => v.id);
+            const placeholders = vendorIds.map(() => '?').join(',');
+            const [counts] = await pool.execute(
+              `SELECT assigned_to, COUNT(*) as total
+               FROM leads 
+               WHERE assigned_to IN (${placeholders})
+                 AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+               GROUP BY assigned_to`,
+              vendorIds
+            );
+            const countMap = new Map();
+            counts.forEach(c => countMap.set(c.assigned_to, c.total));
+            const totalLeads = counts.reduce((sum, c) => sum + c.total, 0) || 1;
+
+            let bestId = vendedoresConPct[0].id;
+            let maxDeficit = -Infinity;
+            for (const v of vendedoresConPct) {
+              const received = countMap.get(v.id) || 0;
+              const realPct = (received / totalLeads) * 100;
+              const deficit = v.lead_percentage - realPct;
+              if (deficit > maxDeficit) {
+                maxDeficit = deficit;
+                bestId = v.id;
+              }
+            }
+            finalAssignedTo = bestId;
+            console.log(`📊 Distribución por %: vendedor ${finalAssignedTo} (déficit: ${maxDeficit.toFixed(1)}%)`);
+          } else {
+            // Fallback: round-robin por marca
+            finalAssignedTo = await getAssignedVendorByBrand(marca);
+          }
         } catch (assignError) {
           console.error('Error en asignación:', assignError);
           return res.status(500).json({ error: 'Error al asignar vendedor' });
