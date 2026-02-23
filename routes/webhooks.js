@@ -239,8 +239,12 @@ router.post('/lacomer', async (req, res) => {
     
     console.log(logMsg);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       leadId: result.insertId,
       assignedTo: assigned_to,
       marca: marca,
@@ -284,7 +288,7 @@ router.post('/sheets-ares', async (req, res) => {
 
     console.log(`Sheets Ares: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -298,8 +302,12 @@ router.post('/sheets-ares', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -337,7 +345,7 @@ router.post('/sheets-favier', async (req, res) => {
 
     console.log(`📋 Sheets Favier: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -352,8 +360,12 @@ router.post('/sheets-favier', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -397,7 +409,7 @@ router.post('/sheets-brian', async (req, res) => {
 
     console.log(`Sheets Brian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -412,8 +424,12 @@ router.post('/sheets-brian', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -457,7 +473,7 @@ router.post('/sheets-sebastian', async (req, res) => {
 
     console.log(`Sheets Sebastian: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -472,8 +488,12 @@ router.post('/sheets-sebastian', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -517,7 +537,7 @@ router.post('/sheets-luciano', async (req, res) => {
 
     console.log(`Sheets Luciano: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -532,8 +552,12 @@ router.post('/sheets-luciano', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -577,7 +601,7 @@ router.post('/sheets-brian-dp', async (req, res) => {
 
     console.log(`Sheets Brian DP: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -591,8 +615,12 @@ router.post('/sheets-brian-dp', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -636,7 +664,7 @@ router.post('/sheets-sebastian-dp', async (req, res) => {
 
     console.log(`Sheets Sebastian DP: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -650,8 +678,12 @@ router.post('/sheets-sebastian-dp', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -695,7 +727,7 @@ router.post('/sheets-luciano-dp', async (req, res) => {
 
     console.log(`Sheets Luciano DP: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -709,8 +741,12 @@ router.post('/sheets-luciano-dp', async (req, res) => {
       ]
     );
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
       vendedor: vendedor.name
@@ -785,7 +821,7 @@ router.post('/emanuel-ares', async (req, res) => {
 
     const usuario = USUARIOS_PROVEEDORES.emanuelAres;
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -802,8 +838,12 @@ router.post('/emanuel-ares', async (req, res) => {
 
     console.log(`✅ Emanuel Ares: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -837,7 +877,7 @@ router.post('/emanuel-martinez', async (req, res) => {
 
     const usuario = USUARIOS_PROVEEDORES.emanuelMartinez;
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -854,8 +894,12 @@ router.post('/emanuel-martinez', async (req, res) => {
 
     console.log(`✅ Emanuel Martinez: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -889,7 +933,7 @@ router.post('/fastleads-nigro', async (req, res) => {
 
     const usuario = USUARIOS_PROVEEDORES.fastLeadsNigro;
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -906,8 +950,12 @@ router.post('/fastleads-nigro', async (req, res) => {
 
     console.log(`✅ Fast Leads Nigro: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -941,7 +989,7 @@ router.post('/fastleads-sebastian', async (req, res) => {
 
     const usuario = USUARIOS_PROVEEDORES.fastLeadsSebastian;
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -958,8 +1006,12 @@ router.post('/fastleads-sebastian', async (req, res) => {
 
     console.log(`✅ Fast Leads Sebastian: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -993,7 +1045,7 @@ router.post('/fastlead-ipperi', async (req, res) => {
 
     const usuario = USUARIOS_PROVEEDORES.fastleadIpperi;
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -1010,8 +1062,12 @@ router.post('/fastlead-ipperi', async (req, res) => {
 
     console.log(`✅ FastLead Ipperi: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -1062,7 +1118,7 @@ router.post('/planes-oficiales-brian', async (req, res) => {
     if (mensaje) notasArr.push('Mensaje: ' + mensaje);
     const notas = notasArr.join(' | ');
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -1079,8 +1135,12 @@ router.post('/planes-oficiales-brian', async (req, res) => {
 
     console.log(`✅ Planes Oficiales: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
@@ -1127,7 +1187,7 @@ router.post('/pagina-goldplan', async (req, res) => {
 
     console.log(`🌐 Página GoldPlan: Asignado a ${vendedor.name} (ID: ${assigned_to}), marca: ${marca}`);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
@@ -1144,8 +1204,12 @@ router.post('/pagina-goldplan', async (req, res) => {
 
     console.log(`✅ Página GoldPlan: Lead creado, asignado a ${vendedor.name}`);
 
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
     res.json({
       ok: true,
+      lead: createdLead,
       message: `Lead recibido correctamente`,
       assignedTo: assigned_to,
       vendedor: vendedor.name,
