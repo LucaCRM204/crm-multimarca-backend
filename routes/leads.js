@@ -10,6 +10,22 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+
+// ===== HISTORIAL DE LEADS =====
+async function logLeadHistory(leadId, action, fieldName, oldValue, newValue, userId, userName) {
+  try {
+    await pool.execute(
+      'INSERT INTO lead_history (lead_id, action, field_name, old_value, new_value, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [leadId, action, fieldName, String(oldValue ?? ''), String(newValue ?? ''), userId, userName]
+    );
+  } catch (e) { console.error('Error log history:', e.message); }
+}
+
+const FIELD_LABELS = {
+  nombre: 'Nombre', telefono: 'Teléfono', modelo: 'Modelo', marca: 'Marca',
+  formaPago: 'Forma de Pago', estado: 'Estado', fuente: 'Fuente', notas: 'Observaciones',
+  assigned_to: 'Vendedor', equipo: 'Equipo', fecha: 'Fecha'
+};
 const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
 
 // Importar funciones del socket server
@@ -407,6 +423,7 @@ router.post('/', authenticateToken, async (req, res) => {
     }
     
     console.log('✅ Lead creado:', leadId, assignedTo ? `(asignado a ${assignedTo})` : '(sin asignar)');
+    await logLeadHistory(leadId, 'creacion', null, null, 'Lead creado', req.user?.id, req.user?.name || 'Sistema');
     
     res.json({ ok: true, lead: mapLead(lead) });
   } catch (error) {
@@ -736,14 +753,35 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     values.push(id);
 
+    // Log changes to history
+    const [beforeRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    const beforeLead = beforeRows[0];
+
     await pool.execute(
       `UPDATE leads SET ${setClause.join(', ')}, updated_at = NOW() WHERE id = ?`,
       values
     );
 
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
-    console.log(`✅ Lead ${id} actualizado correctamente. Nuevo estado: ${rows[0].estado}`);
-    res.json({ ok: true, lead: mapLead(rows[0]) });
+    const afterLead = rows[0];
+
+    const trackFields = ['nombre', 'telefono', 'modelo', 'marca', 'formaPago', 'estado', 'fuente', 'notas', 'assigned_to'];
+    for (const field of trackFields) {
+      if (String(beforeLead[field] || '') !== String(afterLead[field] || '')) {
+        let oldVal = beforeLead[field];
+        let newVal = afterLead[field];
+        if (field === 'assigned_to' && (oldVal || newVal)) {
+          try {
+            if (oldVal) { const [u] = await pool.execute('SELECT name FROM users WHERE id = ?', [oldVal]); oldVal = u[0]?.name || oldVal; }
+            if (newVal) { const [u] = await pool.execute('SELECT name FROM users WHERE id = ?', [newVal]); newVal = u[0]?.name || newVal; }
+          } catch(e) {}
+        }
+        await logLeadHistory(id, 'cambio', FIELD_LABELS[field] || field, oldVal, newVal, req.user?.id, req.user?.name || 'Sistema');
+      }
+    }
+
+    console.log(`✅ Lead ${id} actualizado. Estado: ${afterLead.estado}`);
+    res.json({ ok: true, lead: mapLead(afterLead) });
   } catch (error) {
     console.error('❌ Error PUT /leads/:id:', error);
     res.status(500).json({ error: 'Error al actualizar lead' });
@@ -824,6 +862,20 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error DELETE /leads/:id:', error);
     res.status(500).json({ error: 'Error al eliminar lead' });
+  }
+});
+
+// GET historial de un lead
+router.get('/:id/history', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM lead_history WHERE lead_id = ? ORDER BY created_at DESC',
+      [req.params.id]
+    );
+    res.json({ ok: true, history: rows });
+  } catch (error) {
+    console.error('Error GET history:', error);
+    res.status(500).json({ error: 'Error al obtener historial' });
   }
 });
 
