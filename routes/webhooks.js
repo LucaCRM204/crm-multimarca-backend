@@ -38,13 +38,14 @@ const VENDEDORES_FAVIER_SHEETS = [
 const USUARIOS_PROVEEDORES = {
   // GALLARDO VW
   emanuelAres: { id: 299, name: 'Leads Emanuel Ares', marca: 'vw' },
-  emanuelMartinez: { id: 300, name: 'Leads Emanuel Martinez', marca: 'vw' },
+  emanuelNeder: { id: 300, name: 'Leads Emanuel Neder', marca: 'vw' },
   fastLeadsNigro: { id: 301, name: 'Leads Fast Leads Nigro', marca: 'vw' },
   // MITRE FIAT
   fastLeadsSebastian: { id: 302, name: 'Leads Fast Leads Sebastian', marca: 'fiat' },
   fastleadIpperi: { id: 303, name: 'Leads Fast Leads Ipperi', marca: 'fiat' },
   planesOficialesBrian: { id: 312, name: 'Leads Planes Oficiales Brian', marca: 'fiat' },
-  planesOficialesSebastian: { id: 335, name: 'Leads Planes Oficiales Sebastian', marca: 'fiat' }
+  planesOficialesSebastian: { id: 335, name: 'Leads Planes Oficiales Sebastian', marca: 'fiat' },
+  planesOficialesRodrigo: { id: 349, name: 'Leads Planes Oficiales Rodrigo', marca: 'fiat' }
 };
 
 // ========= Contador cíclico Planes Oficiales (6 Brian, 1 Sebastian cada 7) =========
@@ -856,11 +857,11 @@ router.post('/emanuel-ares', async (req, res) => {
   }
 });
 
-// ========= Webhook: Emanuel Martinez (Gallardo Martinez) =========
-router.post('/emanuel-martinez', async (req, res) => {
+// ========= Webhook: Emanuel Neder (Gallardo Neder) =========
+router.post('/emanuel-neder', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
-    if (sheetKey !== 'goldplan-emanuel-martinez-2024') {
+    if (sheetKey !== 'goldplan-emanuel-neder-2024') {
       return res.status(401).json({ error: 'No autorizado' });
     }
 
@@ -875,7 +876,7 @@ router.post('/emanuel-martinez', async (req, res) => {
       });
     }
 
-    const usuario = USUARIOS_PROVEEDORES.emanuelMartinez;
+    const usuario = USUARIOS_PROVEEDORES.emanuelNeder;
 
     const [result] = await pool.execute(
       `INSERT INTO leads
@@ -892,7 +893,7 @@ router.post('/emanuel-martinez', async (req, res) => {
       ]
     );
 
-    console.log(`✅ Emanuel Martinez: Asignado a ${usuario.name} (ID: ${usuario.id})`);
+    console.log(`✅ Emanuel Neder: Asignado a ${usuario.name} (ID: ${usuario.id})`);
 
     const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
     const createdLead = leadRows[0] || null;
@@ -907,7 +908,7 @@ router.post('/emanuel-martinez', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error webhook Emanuel Martinez:', error);
+    console.error('❌ Error webhook Emanuel Neder:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
@@ -1099,15 +1100,21 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       });
     }
 
-    // Distribución cíclica: cada 7 leads, 6 van a Brian y 1 va a Sebastian
-    // Patrón: B B B B B B S  B B B B B B S  ...
-    const esSebastian = (planesOficialesCounter % 7 === 6);
-    const usuario = esSebastian 
-      ? USUARIOS_PROVEEDORES.planesOficialesSebastian 
-      : USUARIOS_PROVEEDORES.planesOficialesBrian;
+    // Distribución cíclica: cada 5 leads, 3 van a Brian, 1 a Sebastian, 1 a Rodrigo
+    // Patrón: B B B S R  B B B S R  ...
+    const ciclo = planesOficialesCounter % 5;
+    let usuario;
+    if (ciclo < 3) {
+      usuario = USUARIOS_PROVEEDORES.planesOficialesBrian;
+    } else if (ciclo === 3) {
+      usuario = USUARIOS_PROVEEDORES.planesOficialesSebastian;
+    } else {
+      usuario = USUARIOS_PROVEEDORES.planesOficialesRodrigo;
+    }
     
     planesOficialesCounter++;
-    console.log(`📊 Planes Oficiales contador: ${planesOficialesCounter} → ${usuario.name} (${esSebastian ? 'Sebastian 1/7' : 'Brian 6/7'})`);
+    const destino = ciclo < 3 ? 'Brian 3/5' : ciclo === 3 ? 'Sebastian 1/5' : 'Rodrigo 1/5';
+    console.log(`📊 Planes Oficiales contador: ${planesOficialesCounter} → ${usuario.name} (${destino})`);
 
     // Construir notas con datos adicionales
     let notasArr = [];
@@ -1145,7 +1152,7 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       assignedTo: usuario.id,
       vendedor: usuario.name,
       fuente: 'Planes Oficiales',
-      distribucion: esSebastian ? 'Sebastian (1/7)' : 'Brian (6/7)',
+      distribucion: destino,
       contadorActual: planesOficialesCounter
     });
 
