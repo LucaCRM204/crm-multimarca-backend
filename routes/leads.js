@@ -384,6 +384,25 @@ router.post('/', authenticateToken, async (req, res) => {
     const assignedTo = finalAssignedTo;
     console.log(`📅 Lead asignado directamente a vendedor ${assignedTo || 'ninguno'}`);
 
+    // Anti-duplicado: verificar si ya existe un lead con este teléfono en los últimos 5 minutos
+    const cleanTel = telefono.replace(/\D/g, '').slice(-10);
+    const [recentDuplicates] = await pool.execute(
+      `SELECT id, nombre, created_at FROM leads 
+       WHERE REPLACE(REPLACE(REPLACE(telefono, '+', ''), '-', ''), ' ', '') LIKE ? 
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+       LIMIT 1`,
+      [`%${cleanTel}`]
+    );
+
+    if (recentDuplicates.length > 0) {
+      console.log(`⚠️ Lead duplicado detectado: tel ${telefono} ya existe como lead #${recentDuplicates[0].id} (creado ${recentDuplicates[0].created_at})`);
+      return res.status(409).json({ 
+        error: 'Lead duplicado', 
+        message: `Ya existe un lead con este teléfono creado hace menos de 5 minutos (Lead #${recentDuplicates[0].id}: ${recentDuplicates[0].nombre})`,
+        existingLeadId: recentDuplicates[0].id
+      });
+    }
+
     // Crear el lead con asignación directa
     const [result] = await pool.execute(`
       INSERT INTO leads (
