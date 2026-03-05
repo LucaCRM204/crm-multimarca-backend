@@ -48,7 +48,8 @@ const USUARIOS_PROVEEDORES = {
   planesOficialesRodrigo: { id: 349, name: 'Leads Planes Oficiales Rodrigo', marca: 'fiat' }
 };
 
-// ========= Contador cíclico Planes Oficiales (6 Brian, 1 Sebastian cada 7) =========
+// ========= Planes Oficiales: distribución proporcional por % =========
+// Brian 700 (50.54%), Sebastian 320 (23.10%), Rodrigo 365 (26.35%) = 1385 total
 let planesOficialesCounter = 0;
 
 // ========= Helpers de limpieza / normalización =========
@@ -1100,21 +1101,49 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       });
     }
 
-    // Distribución cíclica: cada 5 leads, 3 van a Brian, 1 a Sebastian, 1 a Rodrigo
-    // Patrón: B B B S R  B B B S R  ...
-    const ciclo = planesOficialesCounter % 5;
-    let usuario;
-    if (ciclo < 3) {
-      usuario = USUARIOS_PROVEEDORES.planesOficialesBrian;
-    } else if (ciclo === 3) {
-      usuario = USUARIOS_PROVEEDORES.planesOficialesSebastian;
-    } else {
-      usuario = USUARIOS_PROVEEDORES.planesOficialesRodrigo;
-    }
+    // Distribución proporcional exacta DE ACÁ EN ADELANTE
+    // Targets: Brian 50.54%, Sebastian 23.10%, Rodrigo 26.35%
+    // Solo cuenta leads desde la fecha de inicio de esta distribución
+    const PLANES_WEIGHTS = [
+      { ...USUARIOS_PROVEEDORES.planesOficialesBrian, weight: 50.54 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesSebastian, weight: 23.10 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesRodrigo, weight: 26.35 },
+    ];
+    const PLANES_DIST_START = '2026-03-05'; // Fecha desde la que aplica esta distribución
+
+    const targetIds2 = PLANES_WEIGHTS.map(t => t.id);
+    const ph2 = targetIds2.map(() => '?').join(',');
     
+    // Contar solo leads desde la nueva distribución
+    const [currentCounts] = await pool.execute(
+      `SELECT assigned_to, COUNT(*) as total FROM leads 
+       WHERE assigned_to IN (${ph2}) AND fuente = 'Planes Oficiales'
+       AND created_at >= ?
+       GROUP BY assigned_to`,
+      [...targetIds2, PLANES_DIST_START]
+    );
+    const cMap = new Map();
+    currentCounts.forEach(c => cMap.set(c.assigned_to, c.total));
+    const N = currentCounts.reduce((s, c) => s + c.total, 0);
+
+    // Bresenham: asignar al que más necesita para mantener su proporción
+    // Para cada vendedor: (peso * (N+1) / 100) - actual = cuánto "debería" tener que no tiene
+    let usuario = PLANES_WEIGHTS[0];
+    let maxNeed = -Infinity;
+    for (const t of PLANES_WEIGHTS) {
+      const expected = (N + 1) * t.weight / 100;
+      const actual = cMap.get(t.id) || 0;
+      const need = expected - actual;
+      if (need > maxNeed) {
+        maxNeed = need;
+        usuario = t;
+      }
+    }
+
+    const actualCount = cMap.get(usuario.id) || 0;
     planesOficialesCounter++;
-    const destino = ciclo < 3 ? 'Brian 3/5' : ciclo === 3 ? 'Sebastian 1/5' : 'Rodrigo 1/5';
-    console.log(`📊 Planes Oficiales contador: ${planesOficialesCounter} → ${usuario.name} (${destino})`);
+    const destino = `${usuario.name} (${actualCount + 1} desde ${PLANES_DIST_START}, target ${usuario.weight}%)`;
+    console.log(`📊 Planes Oficiales: lead #${N + 1} → ${destino}`);
 
     // Construir notas con datos adicionales
     let notasArr = [];
