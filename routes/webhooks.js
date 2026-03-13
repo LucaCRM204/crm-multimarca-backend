@@ -1102,14 +1102,14 @@ router.post('/planes-oficiales-brian', async (req, res) => {
     }
 
     // Distribución proporcional exacta DE ACÁ EN ADELANTE
-    // Targets: Brian 50.54%, Sebastian 23.10%, Rodrigo 26.35%
+    // Targets: Brian 58.13% (447), Sebastian 23.54% (181), Rodrigo 18.34% (141) — Total: 769
     // Solo cuenta leads desde la fecha de inicio de esta distribución
     const PLANES_WEIGHTS = [
-      { ...USUARIOS_PROVEEDORES.planesOficialesBrian, weight: 50.54 },
-      { ...USUARIOS_PROVEEDORES.planesOficialesSebastian, weight: 23.10 },
-      { ...USUARIOS_PROVEEDORES.planesOficialesRodrigo, weight: 26.35 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesBrian, weight: 58.13 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesSebastian, weight: 23.54 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesRodrigo, weight: 18.34 },
     ];
-    const PLANES_DIST_START = '2026-03-05'; // Fecha desde la que aplica esta distribución
+    const PLANES_DIST_START = '2026-03-13'; // Fecha desde la que aplica esta distribución
 
     const targetIds2 = PLANES_WEIGHTS.map(t => t.id);
     const ph2 = targetIds2.map(() => '?').join(',');
