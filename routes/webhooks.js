@@ -815,7 +815,7 @@ res.status(500).json({ error: ‘Error al obtener información de equipos’ });
 });
 
 // =====================================================================
-// WEBHOOKS - PROVEEDORES CON USUARIO CONTENEDOR (SIN ROUND ROBIN)
+// WEBHOOKS - PROVEEDORE CON USUARIO CONTENEDOR (SIN ROUND ROBIN)
 // =====================================================================
 
 // ========= Webhook: Emanuel Ares (Gallardo Ares) =========
