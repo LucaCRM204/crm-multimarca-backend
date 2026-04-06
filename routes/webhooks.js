@@ -1082,7 +1082,7 @@ router.post('/fastlead-ipperi', async (req, res) => {
   }
 });
 
-// ========= Webhook: Planes Oficiales (Mitre - vendedor fijo Favier ID 136) =========
+// ========= Webhook: Planes Oficiales (Mitre - distribución Brian 59% / Sebastian 22% / Rodrigo 19%) =========
 router.post('/planes-oficiales-brian', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
@@ -1101,7 +1101,40 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       });
     }
 
-    const usuario = { id: 136, name: 'FAVIER VENDEDOR', marca: 'vw' };
+    // Targets: Brian 800 / Sebastian 300 / Rodrigo 250
+    const PLANES_WEIGHTS = [
+      { ...USUARIOS_PROVEEDORES.planesOficialesBrian,     weight: 800 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesSebastian, weight: 300 },
+      { ...USUARIOS_PROVEEDORES.planesOficialesRodrigo,   weight: 250 },
+    ];
+    const targetIds = PLANES_WEIGHTS.map(t => t.id);
+    const ph = targetIds.map(() => '?').join(',');
+
+    const [currentCounts] = await pool.execute(
+      `SELECT assigned_to, COUNT(*) as total FROM leads 
+       WHERE assigned_to IN (${ph}) AND fuente = 'Planes Oficiales'
+       GROUP BY assigned_to`,
+      targetIds
+    );
+    const cMap = new Map();
+    currentCounts.forEach(c => cMap.set(c.assigned_to, c.total));
+    const N = currentCounts.reduce((s, c) => s + c.total, 0);
+
+    // Bresenham: asignar al que más necesita para mantener su proporción
+    const totalWeight = PLANES_WEIGHTS.reduce((s, t) => s + t.weight, 0);
+    let usuario = PLANES_WEIGHTS[0];
+    let maxNeed = -Infinity;
+    for (const t of PLANES_WEIGHTS) {
+      const expected = (N + 1) * t.weight / totalWeight;
+      const actual = cMap.get(t.id) || 0;
+      const need = expected - actual;
+      if (need > maxNeed) { maxNeed = need; usuario = t; }
+    }
+
+    const actualCount = cMap.get(usuario.id) || 0;
+    planesOficialesCounter++;
+    const destino = `${usuario.name} (${actualCount + 1} total, peso ${usuario.weight}/${totalWeight})`;
+    console.log(`📊 Planes Oficiales: lead #${N + 1} → ${destino}`);
 
     // Construir notas con datos adicionales
     let notasArr = [];
@@ -1138,7 +1171,9 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
-      fuente: 'Planes Oficiales'
+      fuente: 'Planes Oficiales',
+      distribucion: destino,
+      contadorActual: planesOficialesCounter
     });
 
   } catch (error) {
