@@ -1082,7 +1082,7 @@ router.post('/fastlead-ipperi', async (req, res) => {
   }
 });
 
-// ========= Webhook: Planes Oficiales (Mitre - distribución 6 Brian / 1 Sebastian) =========
+// ========= Webhook: Planes Oficiales (Mitre - vendedor fijo Favier ID 136) =========
 router.post('/planes-oficiales-brian', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
@@ -1101,56 +1101,15 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       });
     }
 
-    // Targets: Brian 80% / Sebastian 15% / Rodrigo 5%
-    // Solo cuenta leads desde la fecha de inicio de esta distribución
-    const PLANES_WEIGHTS = [
-      { ...USUARIOS_PROVEEDORES.planesOficialesBrian, weight: 80 },
-      { ...USUARIOS_PROVEEDORES.planesOficialesSebastian, weight: 15 },
-      { ...USUARIOS_PROVEEDORES.planesOficialesRodrigo, weight: 5 },
-    ];
-    const PLANES_DIST_START = '2026-03-21'; // Fecha desde la que aplica esta distribución
-
-    const targetIds2 = PLANES_WEIGHTS.map(t => t.id);
-    const ph2 = targetIds2.map(() => '?').join(',');
-    
-    // Contar solo leads desde la nueva distribución
-    const [currentCounts] = await pool.execute(
-      `SELECT assigned_to, COUNT(*) as total FROM leads 
-       WHERE assigned_to IN (${ph2}) AND fuente = 'Planes Oficiales'
-       AND created_at >= ?
-       GROUP BY assigned_to`,
-      [...targetIds2, PLANES_DIST_START]
-    );
-    const cMap = new Map();
-    currentCounts.forEach(c => cMap.set(c.assigned_to, c.total));
-    const N = currentCounts.reduce((s, c) => s + c.total, 0);
-
-    // Bresenham: asignar al que más necesita para mantener su proporción
-    // Para cada vendedor: (peso * (N+1) / 100) - actual = cuánto "debería" tener que no tiene
-    let usuario = PLANES_WEIGHTS[0];
-    let maxNeed = -Infinity;
-    for (const t of PLANES_WEIGHTS) {
-      const expected = (N + 1) * t.weight / 100;
-      const actual = cMap.get(t.id) || 0;
-      const need = expected - actual;
-      if (need > maxNeed) {
-        maxNeed = need;
-        usuario = t;
-      }
-    }
-
-    const actualCount = cMap.get(usuario.id) || 0;
-    planesOficialesCounter++;
-    const destino = `${usuario.name} (${actualCount + 1} desde ${PLANES_DIST_START}, target ${usuario.weight}%)`;
-    console.log(`📊 Planes Oficiales: lead #${N + 1} → ${destino}`);
+    const usuario = { id: 136, name: 'FAVIER VENDEDOR', marca: 'vw' };
 
     // Construir notas con datos adicionales
     let notasArr = [];
-    if (email) notasArr.push('Email: ' + email);
+    if (email)     notasArr.push('Email: ' + email);
     if (telefono2) notasArr.push('Tel2: ' + telefono2);
     if (provincia) notasArr.push('Provincia: ' + provincia);
-    if (campana) notasArr.push('Campaña: ' + campana);
-    if (mensaje) notasArr.push('Mensaje: ' + mensaje);
+    if (campana)   notasArr.push('Campaña: ' + campana);
+    if (mensaje)   notasArr.push('Mensaje: ' + mensaje);
     const notas = notasArr.join(' | ');
 
     const [result] = await pool.execute(
@@ -1179,9 +1138,7 @@ router.post('/planes-oficiales-brian', async (req, res) => {
       message: `Lead asignado a ${usuario.name}`,
       assignedTo: usuario.id,
       vendedor: usuario.name,
-      fuente: 'Planes Oficiales',
-      distribucion: destino,
-      contadorActual: planesOficialesCounter
+      fuente: 'Planes Oficiales'
     });
 
   } catch (error) {
