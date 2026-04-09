@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const pool = require('../db');
 const { getAssignedVendorByBrand } = require('../utils/assign');
 const router = express.Router();
@@ -11,8 +11,10 @@ let lucianoSheetsIndex = 0;
 let brianDPSheetsIndex = 0;
 let sebastianDPSheetsIndex = 0;
 let lucianoDPSheetsIndex = 0;
-let favierSheetsIndex = 0; // NUEVO: índice para Favier
-let paginaGoldplanIndex = 0; // índice para leads de la página web
+let favierSheetsIndex = 0;
+let paginaGoldplanIndex = 0;
+let emanuelSheetsIndex = 0; // NUEVO: Emanuel (Google Sheets)
+let alessioSheetsIndex = 0; // NUEVO: Alessio (Bot WhatsApp)
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -49,7 +51,6 @@ const USUARIOS_PROVEEDORES = {
 };
 
 // ========= Planes Oficiales: distribución proporcional por % =========
-// Brian 700 (50.54%), Sebastian 320 (23.10%), Rodrigo 365 (26.35%) = 1385 total
 let planesOficialesCounter = 0;
 
 // ========= Helpers de limpieza / normalización =========
@@ -199,9 +200,8 @@ router.post('/lacomer', async (req, res) => {
 
     let assigned_to;
 
-    // Si viene de la ruleta digital, asignar directamente al vendedor Ruleta
     if (fuente === 'ruleta_digital') {
-      assigned_to = 266; // Vendedor Ruleta
+      assigned_to = 266;
       console.log('🎰 Lead de Ruleta Digital: Asignado directamente a vendedor Ruleta (ID: 266)');
     } else if (equipoId) {
       console.log(`👥 Asignando lead al equipo ID: ${equipoId}`);
@@ -1120,7 +1120,6 @@ router.post('/planes-oficiales-brian', async (req, res) => {
     currentCounts.forEach(c => cMap.set(c.assigned_to, c.total));
     const N = currentCounts.reduce((s, c) => s + c.total, 0);
 
-    // Bresenham: asignar al que más necesita para mantener su proporción
     const totalWeight = PLANES_WEIGHTS.reduce((s, t) => s + t.weight, 0);
     let usuario = PLANES_WEIGHTS[0];
     let maxNeed = -Infinity;
@@ -1136,7 +1135,6 @@ router.post('/planes-oficiales-brian', async (req, res) => {
     const destino = `${usuario.name} (${actualCount + 1} total, peso ${usuario.weight}/${totalWeight})`;
     console.log(`📊 Planes Oficiales: lead #${N + 1} → ${destino}`);
 
-    // Construir notas con datos adicionales
     let notasArr = [];
     if (email)     notasArr.push('Email: ' + email);
     if (telefono2) notasArr.push('Tel2: ' + telefono2);
@@ -1189,7 +1187,6 @@ router.post('/pagina-goldplan', async (req, res) => {
 
     console.log('🌐 Webhook Página GoldPlan recibido:', JSON.stringify(req.body, null, 2));
 
-    // Validaciones
     if (!nombre || !telefono) {
       return res.status(400).json({ 
         error: 'Nombre y teléfono son requeridos',
@@ -1197,16 +1194,13 @@ router.post('/pagina-goldplan', async (req, res) => {
       });
     }
 
-    // Limpiar teléfono
     const telefonoLimpio = normalizePhone(telefono);
     if (!telefonoLimpio || telefonoLimpio.length < 8) {
       return res.status(400).json({ error: 'Teléfono inválido' });
     }
 
-    // Detectar marca del modelo seleccionado
     const marca = detectMarca(modelo) || 'vw';
 
-    // Round-robin con vendedores Favier
     const vendedor = VENDEDORES_FAVIER_SHEETS[paginaGoldplanIndex];
     paginaGoldplanIndex = (paginaGoldplanIndex + 1) % VENDEDORES_FAVIER_SHEETS.length;
 
@@ -1249,6 +1243,164 @@ router.post('/pagina-goldplan', async (req, res) => {
   }
 });
 
+// ========= Webhook: Google Sheets Emanuel (round-robin equipo Supervisor ID 358) =========
+// POST /api/webhooks/sheets-emanuel
+// Header: x-sheet-key: goldplan-sheets-emanuel-2024
+router.post('/sheets-emanuel', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-sheets-emanuel-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, email, marca, notas, observaciones } = req.body;
+
+    console.log('📥 Webhook Sheets Emanuel recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const SUPERVISOR_EMANUEL_ID = 358;
+
+    const vendedores = await getVendedoresDeEquipo(SUPERVISOR_EMANUEL_ID);
+
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo Emanuel' });
+    }
+
+    const vendedor = vendedores[emanuelSheetsIndex % vendedores.length];
+    emanuelSheetsIndex = (emanuelSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`📋 Sheets Emanuel: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    const marcaFinal = (marca || 'vw').toLowerCase();
+
+    const notasArr = [];
+    if (email)         notasArr.push('Email: ' + email);
+    if (notas)         notasArr.push(notas);
+    if (observaciones) notasArr.push(observaciones);
+    const notasFinal = notasArr.join(' | ');
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre   || '',
+        telefono || '',
+        modelo   || 'Consultar',
+        marcaFinal,
+        notasFinal,
+        assigned_to
+      ]
+    );
+
+    console.log(`✅ Sheets Emanuel: Lead #${result.insertId} → ${vendedor.name}`);
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    res.json({
+      ok: true,
+      lead: createdLead,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      fuente: 'Emanuel'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Sheets Emanuel:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========= Webhook: Alessio Bot WhatsApp (round-robin equipo Supervisor ID 358) =========
+// POST /api/webhooks/sheets-alessio
+// Header: x-sheet-key: goldplan-sheets-alessio-2024
+router.post('/sheets-alessio', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-sheets-alessio-2024') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, email, marca, notas } = req.body;
+
+    console.log('📥 Webhook Alessio Bot recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!telefono) {
+      return res.status(400).json({
+        error: 'Telefono es requerido',
+        received: { nombre, telefono }
+      });
+    }
+
+    const SUPERVISOR_ALESSIO_ID = 358;
+
+    const vendedores = await getVendedoresDeEquipo(SUPERVISOR_ALESSIO_ID);
+
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo Alessio' });
+    }
+
+    const vendedor = vendedores[alessioSheetsIndex % vendedores.length];
+    alessioSheetsIndex = (alessioSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`🤖 Alessio Bot: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    const marcaFinal = (marca || 'vw').toLowerCase();
+
+    const notasArr = [];
+    if (email) notasArr.push('Email: ' + email);
+    if (notas) notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, observaciones, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Alessio', ?, ?, ?, NOW())`,
+      [
+        nombre   || 'Sin nombre',
+        telefono || '',
+        modelo   || 'Consultar',
+        marcaFinal,
+        notas    || 'Bot Alessio', // notas = origen
+        email    || '',            // observaciones = email directo
+        assigned_to
+      ]
+    );
+
+    console.log(`✅ Alessio Bot: Lead #${result.insertId} → ${vendedor.name}`);
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    res.json({
+      ok: true,
+      lead: createdLead,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      fuente: 'Alessio'
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Alessio Bot:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
@@ -1264,7 +1416,9 @@ router.get('/health', (req, res) => {
       lucianoDP: lucianoDPSheetsIndex,
       favier: favierSheetsIndex,
       paginaGoldplan: paginaGoldplanIndex,
-      planesOficiales: planesOficialesCounter
+      planesOficiales: planesOficialesCounter,
+      emanuel: emanuelSheetsIndex,
+      alessio: alessioSheetsIndex
     },
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
     usuariosProveedores: Object.values(USUARIOS_PROVEEDORES).map(u => u.name)
