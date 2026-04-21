@@ -1327,6 +1327,82 @@ router.post('/sheets-herrera', async (req, res) => {
   }
 });
 
+// ========= Webhook: Google Sheets Lucas Ponce (vendedor único, mismo sheet que Herrera) =========
+// Vendedor: Lucas Gabriel Ponce (ID 377, reporta al supervisor ID 358)
+// Sin round-robin: todo va directo a 377.
+const LUCAS_PONCE_ID = 377;
+
+router.post('/sheets-ponce', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-sheets-ponce-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+
+    console.log('Webhook Sheets Ponce recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Verificar que el vendedor sigue activo
+    const [check] = await pool.execute(
+      'SELECT id, name FROM users WHERE id = ? AND active = 1',
+      [LUCAS_PONCE_ID]
+    );
+    if (check.length === 0) {
+      return res.status(500).json({ error: 'Lucas Ponce (377) no está activo en la DB' });
+    }
+
+    const vendedorNombre = check[0].name;
+
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        marcaFinal,
+        notasFinal,
+        LUCAS_PONCE_ID
+      ]
+    );
+
+    console.log(`✅ Sheets Ponce: Lead #${result.insertId} asignado a ${vendedorNombre}`);
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    res.json({
+      ok: true,
+      lead: createdLead,
+      message: `Lead asignado a ${vendedorNombre}`,
+      assignedTo: LUCAS_PONCE_ID,
+      vendedor: vendedorNombre,
+      fuente: 'Emanuel'
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Ponce:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
