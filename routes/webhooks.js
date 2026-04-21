@@ -1298,7 +1298,7 @@ router.post('/sheets-herrera', async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'Consultar', 'nuevo', 'sheets-herrera', ?, ?, NOW())`,
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
       [
         nombre || '',
         telefono || '',
@@ -1317,7 +1317,8 @@ router.post('/sheets-herrera', async (req, res) => {
       lead: createdLead,
       message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
-      vendedor: vendedor.name
+      vendedor: vendedor.name,
+      fuente: 'Emanuel'
     });
 
   } catch (error) {
