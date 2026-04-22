@@ -14,6 +14,7 @@ let lucianoDPSheetsIndex = 0;
 let favierSheetsIndex = 0; // NUEVO: índice para Favier
 let paginaGoldplanIndex = 0; // índice para leads de la página web
 let herreraSheetsIndex = 0; // NUEVO: índice para equipo Carlos Herrera
+let caseresSheetsIndex = 0; // NUEVO: índice para equipo Martin Caseres
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -1402,7 +1403,85 @@ router.post('/sheets-ponce', async (req, res) => {
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
+// ========= Webhook: Google Sheets Martin Caseres (equipo dinámico) =========
+// ⚠️ COMPLETAR MARTIN_CASERES_ID con el ID del supervisor/gerente en la DB.
+//    Query: SELECT id, name, role FROM users WHERE name LIKE '%Caseres%';
+const MARTIN_CASERES_ID = 357; // <-- COMPLETAR
 
+router.post('/sheets-caseres', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-sheets-caseres-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+
+    console.log('Webhook Sheets Caseres recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    if (!MARTIN_CASERES_ID) {
+      return res.status(500).json({ error: 'MARTIN_CASERES_ID no configurado en webhooks.js' });
+    }
+
+    const vendedores = await getVendedoresDeEquipo(MARTIN_CASERES_ID);
+
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Martin Caseres' });
+    }
+
+    const vendedor = vendedores[caseresSheetsIndex % vendedores.length];
+    caseresSheetsIndex = (caseresSheetsIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`Sheets Caseres: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
+
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        marcaFinal,
+        notasFinal,
+        assigned_to
+      ]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    res.json({
+      ok: true,
+      lead: createdLead,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      fuente: 'Emanuel'
+    });
+
+  } catch (error) {
+    console.error('Error webhook Sheets Caseres:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
@@ -1419,6 +1498,7 @@ router.get('/health', (req, res) => {
       favier: favierSheetsIndex,
       paginaGoldplan: paginaGoldplanIndex,
       herrera: herreraSheetsIndex,
+      caseres: caseresSheetsIndex,
       planesOficiales: planesOficialesCounter
     },
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
