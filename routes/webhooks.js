@@ -15,6 +15,7 @@ let favierSheetsIndex = 0; // NUEVO: índice para Favier
 let paginaGoldplanIndex = 0; // índice para leads de la página web
 let herreraSheetsIndex = 0; // NUEVO: índice para equipo Carlos Herrera
 let caseresSheetsIndex = 0; // NUEVO: índice para equipo Martin Caseres
+let delvalleNigroIndex = 0; // NUEVO: índice para webhook fastleads-nigro redirigido a equipo Delvalle
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -939,11 +940,15 @@ router.post('/fastleads-nigro', async (req, res) => {
 
     // Round-robin entre vendedores del equipo de Victor Delvalle (ID 368)
     const VICTOR_DELVALLE_ID = 368;
-    const assigned_to = await assignVendorInTeam(VICTOR_DELVALLE_ID);
+    const vendedores = await getVendedoresDeEquipo(VICTOR_DELVALLE_ID);
 
-    if (!assigned_to) {
+    if (vendedores.length === 0) {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Victor Delvalle' });
     }
+
+    const vendedor = vendedores[delvalleNigroIndex % vendedores.length];
+    delvalleNigroIndex = (delvalleNigroIndex + 1) % vendedores.length;
+    const assigned_to = vendedor.id;
 
     const [result] = await pool.execute(
       `INSERT INTO leads
@@ -960,7 +965,7 @@ router.post('/fastleads-nigro', async (req, res) => {
       ]
     );
 
-    console.log(`✅ Fast Leads Nigro → equipo Delvalle: Asignado a vendedor ID ${assigned_to}`);
+    console.log(`✅ Fast Leads Nigro → equipo Delvalle: Asignado a ${vendedor.name} (ID: ${assigned_to})`);
 
     const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
     const createdLead = leadRows[0] || null;
@@ -968,8 +973,9 @@ router.post('/fastleads-nigro', async (req, res) => {
     res.json({
       ok: true,
       lead: createdLead,
-      message: `Lead asignado a vendedor de equipo Delvalle (ID: ${assigned_to})`,
+      message: `Lead asignado a ${vendedor.name}`,
       assignedTo: assigned_to,
+      vendedor: vendedor.name,
       fuente: 'Fast Leads'
     });
 
