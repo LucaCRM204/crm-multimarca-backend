@@ -137,6 +137,7 @@ app.use('/api/webhooks', (req, res, next) => {
   next();
 });
 app.use('/api/webhooks', require('./routes/webhooks'));
+app.use('/api/ruleta-stats', require('./routes/ruleta-stats')); // ← NUEVO: Panel de stats remoto
 app.use('/api/activity', activityRouter);
 app.use('/api/scoring', scoringRouter);
 app.use('/api/metas', metasRouter(pool)); // ← NUEVO: Rutas de metas
