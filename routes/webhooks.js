@@ -16,6 +16,13 @@ let paginaGoldplanIndex = 0; // índice para leads de la página web
 let herreraSheetsIndex = 0; // NUEVO: índice para equipo Carlos Herrera
 let caseresSheetsIndex = 0; // NUEVO: índice para equipo Martin Caseres
 let delvalleNigroIndex = 0; // NUEVO: índice para webhook fastleads-nigro redirigido a equipo Delvalle
+let emanuelGeneralIndex = 0; // NUEVO: índice para Emanuel General (todos los vendedores activos)
+
+// IDs a excluir del round-robin de Emanuel General (contenedores + datos viejos)
+const VENDEDORES_EXCLUIDOS_EMANUEL = [
+  198,                                     // Datos viejos
+  299, 300, 301, 302, 303, 312, 335, 349   // Contenedores USUARIOS_PROVEEDORES
+];
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -1495,6 +1502,91 @@ router.post('/sheets-caseres', async (req, res) => {
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
+// ========= Webhook: Google Sheets Emanuel General (TODOS los vendedores) =========
+// Reparte leads de fuente "Emanuel" en round-robin entre TODOS los vendedores activos.
+// Excluye usuarios contenedores (Leads Emanuel Ares, Fast Leads Nigro, etc.) y "Datos viejos" (198).
+router.post('/sheets-emanuel-general', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-sheets-emanuel-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+
+    console.log('📥 Webhook Sheets Emanuel General recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Traer todos los vendedores activos, excluyendo contenedores y datos viejos
+    const placeholders = VENDEDORES_EXCLUIDOS_EMANUEL.map(() => '?').join(',');
+    const [vendedores] = await pool.execute(
+      `SELECT id, name
+         FROM users
+        WHERE active = 1
+          AND role = 'vendedor'
+          AND id NOT IN (${placeholders})
+        ORDER BY id`,
+      VENDEDORES_EXCLUIDOS_EMANUEL
+    );
+
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
+    }
+
+    const vendedor = vendedores[emanuelGeneralIndex % vendedores.length];
+    emanuelGeneralIndex = (emanuelGeneralIndex + 1) % vendedores.length;
+
+    const assigned_to = vendedor.id;
+
+    console.log(`📋 Emanuel General → ${vendedor.name} (ID ${assigned_to}). Pool: ${vendedores.length}, próximo idx: ${emanuelGeneralIndex}`);
+
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+         (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [
+        nombre || '',
+        telefono || '',
+        modelo || 'Consultar',
+        marcaFinal,
+        notasFinal,
+        assigned_to
+      ]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    res.json({
+      ok: true,
+      lead: createdLead,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      fuente: 'Emanuel',
+      totalVendedores: vendedores.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error webhook Sheets Emanuel General:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
@@ -1512,6 +1604,7 @@ router.get('/health', (req, res) => {
       paginaGoldplan: paginaGoldplanIndex,
       herrera: herreraSheetsIndex,
       caseres: caseresSheetsIndex,
+      emanuelGeneral: emanuelGeneralIndex,
       planesOficiales: planesOficialesCounter
     },
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
