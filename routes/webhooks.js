@@ -16,6 +16,15 @@ let paginaGoldplanIndex = 0; // índice para leads de la página web
 let herreraSheetsIndex = 0; // NUEVO: índice para equipo Carlos Herrera
 let caseresSheetsIndex = 0; // NUEVO: índice para equipo Martin Caseres
 let delvalleNigroIndex = 0; // NUEVO: índice para webhook fastleads-nigro redirigido a equipo Delvalle
+let emanuelGeneralIndex = 0; // NUEVO: índice para Emanuel General (todos los vendedores activos)
+
+// IDs a excluir del round-robin de Emanuel General (contenedores + datos viejos)
+const VENDEDORES_EXCLUIDOS_EMANUEL = [
+  13, 198, 380,                            // Datos, Datos viejos, Datos victor
+  136,                                     // FAVIER VENDEDOR
+  266,                                     // Ruleta
+  299, 300, 301, 302, 303, 312, 335, 349   // Contenedores USUARIOS_PROVEEDORES
+];
 
 // ========= VENDEDORES DE ARES - ROBAINA (para Google Sheets) =========
 const VENDEDORES_ARES_SHEETS = [
@@ -1497,15 +1506,7 @@ router.post('/sheets-caseres', async (req, res) => {
 });
 // ========= Webhook: Google Sheets Emanuel General (TODOS los vendedores) =========
 // Reparte leads de fuente "Emanuel" en round-robin entre TODOS los vendedores activos.
-// Excluye usuarios contenedores y "Datos viejos" (198).
-
-let emanuelGeneralIndex = 0;
-
-const VENDEDORES_EXCLUIDOS_EMANUEL = [
-  198,                                     // Datos viejos
-  299, 300, 301, 302, 303, 312, 335, 349   // Contenedores USUARIOS_PROVEEDORES
-];
-
+// Excluye usuarios contenedores (Leads Emanuel Ares, Fast Leads Nigro, etc.) y "Datos viejos" (198).
 router.post('/sheets-emanuel-general', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
@@ -1524,6 +1525,7 @@ router.post('/sheets-emanuel-general', async (req, res) => {
       });
     }
 
+    // Traer todos los vendedores activos, excluyendo contenedores y datos viejos
     const placeholders = VENDEDORES_EXCLUIDOS_EMANUEL.map(() => '?').join(',');
     const [vendedores] = await pool.execute(
       `SELECT id, name
@@ -1586,6 +1588,7 @@ router.post('/sheets-emanuel-general', async (req, res) => {
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
+
 // ========= Health check =========
 router.get('/health', (req, res) => {
   res.json({ 
@@ -1603,6 +1606,7 @@ router.get('/health', (req, res) => {
       paginaGoldplan: paginaGoldplanIndex,
       herrera: herreraSheetsIndex,
       caseres: caseresSheetsIndex,
+      emanuelGeneral: emanuelGeneralIndex,
       planesOficiales: planesOficialesCounter
     },
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
