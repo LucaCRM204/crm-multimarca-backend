@@ -1614,4 +1614,117 @@ router.get('/health', (req, res) => {
   });
 });
 
+
+// ============================================================
+// GOLDPLAN POOL - Smooth Weighted Round-Robin
+// Pesos 9:5:5 -> Caseres:Favier:Delvalle (4500/2500/2500)
+// Distribucion intercalada: cada 19 leads cumple exacto 9/5/5
+// Compartido entre Mastropasqua, Osvaldo, Fast Leads, Emanuel
+// ============================================================
+
+const GOLDPLAN_POOL_GERENTES = {
+  caseres:  { id: 357, peso: 9, label: 'Caseres' },
+  favier:   { id: 116, peso: 5, label: 'Favier' },
+  delvalle: { id: 368, peso: 5, label: 'Delvalle' }
+};
+const GOLDPLAN_POOL_PESO_TOTAL = 19; // 9+5+5
+
+// Estado del WRR (current weights) - compartido entre los 4 endpoints
+const goldplanPoolCw = { caseres: 0, favier: 0, delvalle: 0 };
+// Round-robin dentro de cada equipo
+const goldplanPoolRR = { caseres: 0, favier: 0, delvalle: 0 };
+
+function elegirEquipoGoldplanPool() {
+  // Smooth WRR (estilo Nginx upstream)
+  goldplanPoolCw.caseres  += GOLDPLAN_POOL_GERENTES.caseres.peso;
+  goldplanPoolCw.favier   += GOLDPLAN_POOL_GERENTES.favier.peso;
+  goldplanPoolCw.delvalle += GOLDPLAN_POOL_GERENTES.delvalle.peso;
+
+  let max = 'caseres';
+  if (goldplanPoolCw.favier   > goldplanPoolCw[max]) max = 'favier';
+  if (goldplanPoolCw.delvalle > goldplanPoolCw[max]) max = 'delvalle';
+
+  goldplanPoolCw[max] -= GOLDPLAN_POOL_PESO_TOTAL;
+  return max;
+}
+
+async function asignarVendedorGoldplanPool(equipoKey) {
+  const equipo = GOLDPLAN_POOL_GERENTES[equipoKey];
+  const vendedores = await getVendedoresDeEquipo(equipo.id);
+  if (vendedores.length === 0) return null;
+  const idx = goldplanPoolRR[equipoKey];
+  const vendedor = vendedores[idx % vendedores.length];
+  goldplanPoolRR[equipoKey] = (idx + 1) % vendedores.length;
+  return { vendedor, equipoLabel: equipo.label };
+}
+
+// Factory para crear los 4 endpoints sin duplicar logica
+function crearEndpointGoldplanPool(opts) {
+  const { ruta, sheetKey, fuente } = opts;
+  router.post(ruta, async (req, res) => {
+    try {
+      const key = req.headers['x-sheet-key'];
+      if (key !== sheetKey) {
+        return res.status(401).json({ error: 'No autorizado' });
+      }
+
+      const { nombre, telefono, modelo, marca, localidad, notas, correo } = req.body;
+      console.log(`[${fuente}] Recibido:`, JSON.stringify(req.body));
+
+      if (!nombre || !telefono) {
+        return res.status(400).json({ error: 'Nombre y telefono son requeridos', received: { nombre, telefono } });
+      }
+
+      const equipoKey = elegirEquipoGoldplanPool();
+      const result = await asignarVendedorGoldplanPool(equipoKey);
+      if (!result) {
+        return res.status(500).json({ error: `No hay vendedores activos en equipo ${equipoKey}` });
+      }
+
+      const { vendedor, equipoLabel } = result;
+      const assigned_to = vendedor.id;
+
+      const notasArr = [];
+      if (localidad) notasArr.push('Localidad: ' + localidad);
+      if (correo)    notasArr.push('Mail: ' + correo);
+      if (notas)     notasArr.push(notas);
+      const notasFinal = notasArr.join(' | ');
+
+      const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+      const [ins] = await pool.execute(
+        `INSERT INTO leads
+          (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+         VALUES
+          (?, ?, ?, ?, 'Consultar', 'nuevo', ?, ?, ?, NOW())`,
+        [nombre || '', telefono || '', modelo || 'Consultar', marcaFinal, fuente, notasFinal, assigned_to]
+      );
+
+      console.log(`[${fuente}] Lead #${ins.insertId} -> ${equipoLabel}: ${vendedor.name} (${assigned_to})`);
+
+      const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [ins.insertId]);
+
+      res.json({
+        ok: true,
+        lead: leadRows[0] || null,
+        leadId: ins.insertId,
+        vendedor: vendedor.name,
+        assignedTo: assigned_to,
+        equipo: equipoLabel,
+        fuente
+      });
+    } catch (error) {
+      console.error(`[${fuente}] Error:`, error);
+      res.status(500).json({ error: 'Error al procesar lead' });
+    }
+  });
+}
+
+// Los 4 endpoints del pool
+crearEndpointGoldplanPool({ ruta: '/goldplan-pool-mastropasqua', sheetKey: 'goldplan-pool-mastropasqua-2026', fuente: 'Mastropasqua' });
+crearEndpointGoldplanPool({ ruta: '/goldplan-pool-osvaldo',      sheetKey: 'goldplan-pool-osvaldo-2026',      fuente: 'Osvaldo' });
+crearEndpointGoldplanPool({ ruta: '/goldplan-pool-fastleads',    sheetKey: 'goldplan-pool-fastleads-2026',    fuente: 'Fast Leads' });
+crearEndpointGoldplanPool({ ruta: '/goldplan-pool-emanuel',      sheetKey: 'goldplan-pool-emanuel-2026',      fuente: 'Emanuel' });
+
+
 module.exports = router;
