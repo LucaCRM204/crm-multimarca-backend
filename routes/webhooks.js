@@ -1727,4 +1727,77 @@ crearEndpointGoldplanPool({ ruta: '/goldplan-pool-fastleads',    sheetKey: 'gold
 crearEndpointGoldplanPool({ ruta: '/goldplan-pool-emanuel',      sheetKey: 'goldplan-pool-emanuel-2026',      fuente: 'Emanuel' });
 
 
+
+// ============================================================
+// FERNANDO NIEVA → equipo Martin Caseres (357) - exclusivo
+// Round-robin estricto entre los vendedores de Caseres
+// ============================================================
+let fernandoCaseresIndex = 0;
+
+router.post('/sheets-fernando-caseres', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-fernando-caseres-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const {
+      nombre, telefono, modelo, marca,
+      tipo_entrega, tipo_anticipo, localidad, horario
+    } = req.body;
+
+    console.log('[Fernando-Caseres] Recibido:', JSON.stringify(req.body));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ error: 'Nombre y telefono requeridos', received: { nombre, telefono } });
+    }
+
+    const vendedores = await getVendedoresDeEquipo(357); // Martin Caseres
+    if (!vendedores.length) {
+      return res.status(500).json({ error: 'No hay vendedores activos en equipo Caseres' });
+    }
+
+    const vendedor = vendedores[fernandoCaseresIndex % vendedores.length];
+    fernandoCaseresIndex = (fernandoCaseresIndex + 1) % vendedores.length;
+    const assigned_to = vendedor.id;
+
+    // Armar notas con todos los campos extras
+    const notasArr = [];
+    if (tipo_entrega)  notasArr.push('Tipo de entrega: ' + tipo_entrega);
+    if (tipo_anticipo) notasArr.push('Anticipo: ' + tipo_anticipo);
+    if (localidad)     notasArr.push('Localidad: ' + localidad);
+    if (horario)       notasArr.push('Horario contacto: ' + horario);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+    const [ins] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Fernando', ?, ?, NOW())`,
+      [nombre, telefono, modelo || 'Consultar', marcaFinal, notasFinal, assigned_to]
+    );
+
+    console.log(`[Fernando-Caseres] Lead #${ins.insertId} -> ${vendedor.name} (${assigned_to}) | pool: ${vendedores.length}`);
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [ins.insertId]);
+
+    res.json({
+      ok: true,
+      lead: leadRows[0] || null,
+      leadId: ins.insertId,
+      vendedor: vendedor.name,
+      assignedTo: assigned_to,
+      equipo: 'Caseres',
+      fuente: 'Fernando',
+      pool: vendedores.length
+    });
+  } catch (error) {
+    console.error('[Fernando-Caseres] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+
 module.exports = router;
