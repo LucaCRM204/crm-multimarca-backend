@@ -91,7 +91,9 @@ function detectMarca(text) {
   return null;
 }
 
-// Función para obtener todos los vendedores de un equipo (jerárquico)
+// Función para obtener todos los vendedores de un equipo (jerárquico via CTE recursivo)
+// ROBUSTO: recorre toda la jerarquía descendente sin importar la profundidad ni los roles intermedios.
+// Funciona aunque el líder sea director, gerente, supervisor, o cambie la estructura del equipo.
 async function getVendedoresDeEquipo(equipoId) {
   try {
     const [leader] = await pool.execute(
@@ -104,48 +106,29 @@ async function getVendedoresDeEquipo(equipoId) {
       return [];
     }
 
-    const leaderRole = leader[0].role;
     const leaderName = leader[0].name;
+    const leaderRole = leader[0].role;
 
-    console.log(`👥 Buscando vendedores del equipo liderado por ${leaderName} (${leaderRole})`);
+    console.log(`👥 Buscando vendedores del equipo de ${leaderName} (${leaderRole}) — CTE recursivo`);
 
-    let vendedores = [];
-
-    if (leaderRole === 'gerente') {
-      [vendedores] = await pool.execute(`
-        SELECT u.id, u.name, u.role
+    const [vendedores] = await pool.execute(`
+      WITH RECURSIVE tree AS (
+        SELECT id FROM users WHERE id = ?
+        UNION ALL
+        SELECT u.id
         FROM users u
+        INNER JOIN tree t ON u.reportsTo = t.id
         WHERE u.active = 1
-          AND u.role = 'vendedor'
-          AND (
-            u.reportsTo = ?
-            OR u.reportsTo IN (
-              SELECT id FROM users 
-              WHERE reportsTo = ? 
-                AND role = 'supervisor' 
-                AND active = 1
-            )
-          )
-        ORDER BY u.id
-      `, [equipoId, equipoId]);
-
-    } else if (leaderRole === 'supervisor') {
-      [vendedores] = await pool.execute(`
-        SELECT u.id, u.name, u.role
-        FROM users u
-        WHERE u.active = 1
-          AND u.role = 'vendedor'
-          AND u.reportsTo = ?
-        ORDER BY u.id
-      `, [equipoId]);
-
-    } else {
-      console.error('⚠️ El equipoId debe ser un gerente o supervisor, recibido:', leaderRole);
-      return [];
-    }
+      )
+      SELECT DISTINCT u.id, u.name, u.role
+      FROM users u
+      INNER JOIN tree t ON u.id = t.id
+      WHERE u.active = 1
+        AND u.role = 'vendedor'
+      ORDER BY u.id
+    `, [equipoId]);
 
     console.log(`✅ Encontrados ${vendedores.length} vendedores en equipo de ${leaderName}`);
-    vendedores.forEach(v => console.log(`   - ${v.name} (ID: ${v.id})`));
 
     return vendedores;
 
