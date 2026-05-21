@@ -1783,4 +1783,57 @@ router.post('/sheets-fernando-caseres', async (req, res) => {
 });
 
 
+// ========= Webhook: Bot WhatsApp GoldPlan — Caseres + Favier =========
+// El bot ya hace el round-robin internamente y manda el assigned_to resuelto.
+// Este endpoint solo inserta el lead tal como llega.
+// Header requerido: x-sheet-key: goldplan-bot-cf-2026
+router.post('/bot-caseres-favier', async (req, res) => {
+  try {
+    const sheetKey = req.headers['x-sheet-key'];
+    if (sheetKey !== 'goldplan-bot-cf-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, notas, assigned_to } = req.body;
+
+    console.log('[Bot CF] Lead recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!telefono || !assigned_to) {
+      return res.status(400).json({ error: 'telefono y assigned_to son requeridos' });
+    }
+
+    const marcaFinal = (marca || 'vw').toString().toLowerCase();
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'whatsapp', ?, ?, NOW())`,
+      [
+        nombre      || 'Sin nombre',
+        telefono    || '',
+        modelo      || 'Consultar',
+        marcaFinal,
+        notas       || '',
+        assigned_to,
+      ]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const createdLead = leadRows[0] || null;
+
+    console.log(`[Bot CF] Lead #${result.insertId} creado → assigned_to ${assigned_to}`);
+
+    res.json({
+      ok:          true,
+      lead:        createdLead,
+      assignedTo:  assigned_to,
+    });
+
+  } catch (error) {
+    console.error('[Bot CF] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
 module.exports = router;
