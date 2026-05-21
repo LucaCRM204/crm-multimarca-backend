@@ -1808,7 +1808,7 @@ router.post('/bot-caseres-favier', async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
        VALUES
-        (?, ?, ?, ?, 'Consultar', 'nuevo', 'whatsapp', ?, ?, NOW())`,
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Alessio', ?, ?, NOW())`,
       [
         nombre      || 'Sin nombre',
         telefono    || '',
