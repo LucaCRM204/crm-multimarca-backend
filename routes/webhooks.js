@@ -138,6 +138,36 @@ async function getVendedoresDeEquipo(equipoId) {
   }
 }
 
+// Igual que getVendedoresDeEquipo pero para VARIOS líderes a la vez (ej: Caseres + Orge)
+async function getVendedoresDeEquipos(equipoIds) {
+  try {
+    if (!equipoIds || equipoIds.length === 0) return [];
+    const ph = equipoIds.map(() => '?').join(',');
+    const [vendedores] = await pool.execute(`
+      WITH RECURSIVE tree AS (
+        SELECT id FROM users WHERE id IN (${ph})
+        UNION ALL
+        SELECT u.id FROM users u INNER JOIN tree t ON u.reportsTo = t.id WHERE u.active = 1
+      )
+      SELECT DISTINCT u.id, u.name
+      FROM users u INNER JOIN tree t ON u.id = t.id
+      WHERE u.active = 1 AND u.role = 'vendedor'
+      ORDER BY u.id
+    `, equipoIds);
+    return vendedores;
+  } catch (e) {
+    console.error('❌ getVendedoresDeEquipos:', e.message);
+    return [];
+  }
+}
+
+// IDs de gerentes GoldPlan (mes actual)
+const CASERES_ID = 357;
+const ORGE_ID = 419;
+const SANTIAGO_DE_TORRES_ID = 424;
+// índices round-robin para los webhooks de Santiago de Torres
+let santiagoEmanuelIdx = 0, santiagoFastIdx = 0, santiagoGleIdx = 0, fastleadsGeneralIdx = 0;
+
 // Round-robin por equipo
 let roundRobinIndex = {};
 
@@ -1508,17 +1538,8 @@ router.post('/sheets-emanuel-general', async (req, res) => {
       });
     }
 
-    // Traer todos los vendedores activos, excluyendo contenedores y datos viejos
-    const placeholders = VENDEDORES_EXCLUIDOS_EMANUEL.map(() => '?').join(',');
-    const [vendedores] = await pool.execute(
-      `SELECT id, name
-         FROM users
-        WHERE active = 1
-          AND role = 'vendedor'
-          AND id NOT IN (${placeholders})
-        ORDER BY id`,
-      VENDEDORES_EXCLUIDOS_EMANUEL
-    );
+    // Reparte SOLO entre los equipos de Caseres (357) y Orge (419)
+    const vendedores = await getVendedoresDeEquipos([CASERES_ID, ORGE_ID]);
 
     if (vendedores.length === 0) {
       return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
@@ -1834,6 +1855,73 @@ router.post('/bot-caseres-favier', async (req, res) => {
     console.error('[Bot CF] Error:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
+});
+
+// ========= Santiago De Torres (424) — Emanuel / Fast Leads / GLE =========
+async function crearLeadSantiago(req, res, fuente, getIdx, setIdx) {
+  try {
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+    if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
+    const vendedores = await getVendedoresDeEquipo(SANTIAGO_DE_TORRES_ID);
+    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Santiago De Torres' });
+    const idx = getIdx() % vendedores.length;
+    const vendedor = vendedores[idx];
+    setIdx((idx + 1) % vendedores.length);
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+         (?, ?, ?, ?, 'Consultar', 'nuevo', ?, ?, ?, NOW())`,
+      [nombre || '', telefono || '', modelo || 'Consultar', marcaFinal, fuente, notasArr.join(' | '), vendedor.id]
+    );
+    console.log(`[SANTIAGO ${fuente}] Lead ${result.insertId} -> ${vendedor.name} (${vendedor.id})`);
+    res.json({ ok: true, leadId: result.insertId, assignedTo: vendedor.id, vendedor: vendedor.name, fuente });
+  } catch (error) {
+    console.error('Error Santiago ' + fuente + ':', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+}
+
+router.post('/sheets-emanuel-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-emanuel-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'Emanuel', () => santiagoEmanuelIdx, v => { santiagoEmanuelIdx = v; });
+});
+
+router.post('/sheets-fastleads-general', async (req, res) => {
+  try {
+    if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-2026') return res.status(401).json({ error: 'No autorizado' });
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+    if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
+    const vendedores = await getVendedoresDeEquipos([CASERES_ID, ORGE_ID]);
+    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en Caseres+Orge' });
+    const vendedor = vendedores[fastleadsGeneralIdx % vendedores.length];
+    fastleadsGeneralIdx = (fastleadsGeneralIdx + 1) % vendedores.length;
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+         (?, ?, ?, ?, 'Consultar', 'nuevo', 'Fast Leads', ?, ?, NOW())`,
+      [nombre || '', telefono || '', modelo || 'Consultar', marcaFinal, notasArr.join(' | '), vendedor.id]
+    );
+    console.log(`[FASTLEADS Caseres+Orge] Lead ${result.insertId} -> ${vendedor.name} (${vendedor.id})`);
+    res.json({ ok: true, leadId: result.insertId, assignedTo: vendedor.id, vendedor: vendedor.name, fuente: 'Fast Leads' });
+  } catch (error) {
+    console.error('Error FastLeads Caseres+Orge:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+router.post('/sheets-gle-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-gle-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
 });
 
 module.exports = router;
