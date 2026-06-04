@@ -228,6 +228,10 @@ router.post('/lacomer', async (req, res) => {
     if (fuente === 'ruleta_digital') {
       assigned_to = 266; // Vendedor Ruleta
       console.log('🎰 Lead de Ruleta Digital: Asignado directamente a vendedor Ruleta (ID: 266)');
+    } else if (body.assigned_to) {
+      // El número por donde entró pertenece a un vendedor → lead directo a él
+      assigned_to = parseInt(body.assigned_to);
+      console.log(`🎯 Lead asignado DIRECTO a vendedor ${assigned_to} (dueño del número WhatsApp)`);
     } else if (equipoId) {
       console.log(`👥 Asignando lead al equipo ID: ${equipoId}`);
       
