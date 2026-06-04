@@ -165,6 +165,8 @@ async function getVendedoresDeEquipos(equipoIds) {
 const CASERES_ID = 357;
 const ORGE_ID = 419;
 const SANTIAGO_DE_TORRES_ID = 424;
+// Santiago tiene 2 supervisiones: los leads de planillas van SOLO al equipo de Martin Favier
+const FAVIER_ID = 116;
 // índices round-robin para los webhooks de Santiago de Torres
 let santiagoEmanuelIdx = 0, santiagoFastIdx = 0, santiagoGleIdx = 0, fastleadsGeneralIdx = 0;
 
@@ -1866,8 +1868,8 @@ async function crearLeadSantiago(req, res, fuente, getIdx, setIdx) {
   try {
     const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
     if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
-    const vendedores = await getVendedoresDeEquipo(SANTIAGO_DE_TORRES_ID);
-    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Santiago De Torres' });
+    const vendedores = await getVendedoresDeEquipo(FAVIER_ID);
+    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Martin Favier' });
     const idx = getIdx() % vendedores.length;
     const vendedor = vendedores[idx];
     setIdx((idx + 1) % vendedores.length);
