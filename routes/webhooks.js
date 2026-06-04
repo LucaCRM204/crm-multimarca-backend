@@ -1928,4 +1928,30 @@ router.post('/sheets-gle-santiago', async (req, res) => {
   await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
 });
 
+// ========= Bot: actualización progresiva de leads (espejo de ALRA) =========
+router.post('/bot-lead-update', async (req, res) => {
+  try {
+    const key = req.headers['x-bot-key'] || req.headers['x-zapier-key'];
+    if (key !== 'goldplan-bot-update-2026') return res.status(401).json({ error: 'No autorizado' });
+    const { leadId, nombre, modelo, marca, notas } = req.body || {};
+    if (!leadId) return res.status(400).json({ error: 'Falta leadId' });
+    const sets = [];
+    const vals = [];
+    if (nombre !== undefined && nombre !== null) { sets.push('nombre = ?'); vals.push(String(nombre)); }
+    if (modelo !== undefined && modelo !== null) { sets.push('modelo = ?'); vals.push(String(modelo)); }
+    if (marca && ['vw', 'fiat', 'peugeot', 'renault'].includes(String(marca).toLowerCase())) {
+      sets.push('marca = ?'); vals.push(String(marca).toLowerCase());
+    }
+    if (notas !== undefined && notas !== null) { sets.push('notas = ?'); vals.push(String(notas)); }
+    if (sets.length === 0) return res.status(400).json({ error: 'Nada para actualizar' });
+    vals.push(parseInt(leadId));
+    const [r] = await pool.execute(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, vals);
+    console.log(`🔄 [BOT-UPDATE] Lead ${leadId} actualizado:`, JSON.stringify({ nombre, modelo, marca }));
+    res.json({ ok: true, updated: r.affectedRows });
+  } catch (err) {
+    console.error('[bot-lead-update] Error:', err.message);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 module.exports = router;
