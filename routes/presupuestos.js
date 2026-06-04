@@ -2,6 +2,35 @@ const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const fs = require('fs');
+const multer = require('multer');
+const path = require('path');
+
+// Configurar multer para manejar archivos (imágenes del presupuesto)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '../uploads/temp');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: function (req, file, cb) {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Solo se permiten archivos de imagen'));
+    }
+  }
+});
 
 // pdfGenerator es opcional: si el archivo no está todavía, el server bootea igual
 // y solo el endpoint /generar-pdf devuelve 501 hasta que lo agregues.
@@ -218,8 +247,15 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// POST generar PDF del presupuesto
-router.post('/generar-pdf', authenticateToken, async (req, res) => {
+// POST generar PDF del presupuesto CON ARCHIVOS (igual que ALRA)
+router.post('/generar-pdf', authenticateToken, upload.fields([
+  { name: 'imagen1', maxCount: 1 },
+  { name: 'imagen2', maxCount: 1 },
+  { name: 'imagen3', maxCount: 1 },
+  { name: 'imagenCotizador', maxCount: 1 }
+]), async (req, res) => {
+  const uploadedFiles = [];
+
   try {
     if (!generarPresupuestoPDF) {
       return res.status(501).json({ error: 'Generador de PDF no instalado en este servidor (falta services/pdfGenerator.js)' });
@@ -227,23 +263,69 @@ router.post('/generar-pdf', authenticateToken, async (req, res) => {
 
     console.log(`User ${req.user.username || 'unknown'} (ID: ${req.user.userId || req.user.id}) accessing POST /generar-pdf`);
 
-    const { filePath, fileName } = await generarPresupuestoPDF(req.body);
+    // Datos del formulario: multipart manda JSON en req.body.data; si vino JSON directo, usar el body
+    const formData = req.body && req.body.data ? JSON.parse(req.body.data) : (req.body || {});
 
+    // Agregar rutas de las imágenes subidas
+    const imagenes = [];
+    if (req.files) {
+      if (req.files.imagen1) {
+        imagenes[0] = req.files.imagen1[0].path;
+        uploadedFiles.push(req.files.imagen1[0].path);
+      }
+      if (req.files.imagen2) {
+        imagenes[1] = req.files.imagen2[0].path;
+        uploadedFiles.push(req.files.imagen2[0].path);
+      }
+      if (req.files.imagen3) {
+        imagenes[2] = req.files.imagen3[0].path;
+        uploadedFiles.push(req.files.imagen3[0].path);
+      }
+      if (req.files.imagenCotizador) {
+        formData.imagenCotizador = req.files.imagenCotizador[0].path;
+        uploadedFiles.push(req.files.imagenCotizador[0].path);
+      }
+    }
+
+    formData.imagenes = imagenes;
+
+    // Generar el PDF
+    const { filePath, fileName } = await generarPresupuestoPDF(formData);
+
+    // Enviar el archivo
     res.download(filePath, fileName, (err) => {
       if (err) {
         console.error('Error sending file:', err);
       }
+
       fs.unlink(filePath, (unlinkErr) => {
         if (unlinkErr) {
-          console.error('Error deleting temp file:', unlinkErr);
+          console.error('Error deleting PDF file:', unlinkErr);
         } else {
-          console.log('Temp file deleted successfully:', fileName);
+          console.log('PDF file deleted successfully:', fileName);
         }
+      });
+
+      uploadedFiles.forEach(file => {
+        fs.unlink(file, (unlinkErr) => {
+          if (unlinkErr) {
+            console.error('Error deleting uploaded file:', unlinkErr);
+          }
+        });
       });
     });
 
   } catch (error) {
     console.error('Error POST /presupuestos/generar-pdf:', error);
+
+    uploadedFiles.forEach(file => {
+      fs.unlink(file, (unlinkErr) => {
+        if (unlinkErr) {
+          console.error('Error deleting uploaded file after error:', unlinkErr);
+        }
+      });
+    });
+
     res.status(500).json({ error: 'Error al generar PDF' });
   }
 });
