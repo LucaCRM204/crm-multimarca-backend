@@ -1,151 +1,81 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const fs = require('fs');
 
-// GET todos los presupuestos
+// pdfGenerator es opcional: si el archivo no está todavía, el server bootea igual
+// y solo el endpoint /generar-pdf devuelve 501 hasta que lo agregues.
+let generarPresupuestoPDF = null;
+try {
+  ({ generarPresupuestoPDF } = require('../services/pdfGenerator'));
+} catch (e) {
+  console.warn('⚠️ services/pdfGenerator no disponible — /presupuestos/generar-pdf deshabilitado:', e.message);
+}
+
+const MARCAS_VALIDAS = ['vw', 'fiat', 'peugeot', 'renault'];
+
+// Función para verificar si es Owner
+async function isOwner(userId) {
+  try {
+    const [users] = await pool.execute('SELECT role FROM users WHERE id = ?', [userId]);
+    if (users.length === 0) return false;
+    return ['owner', 'dueño'].includes(users[0].role);
+  } catch (error) {
+    console.error('Error checking owner:', error);
+    return false;
+  }
+}
+
+// GET todas las plantillas (todos los usuarios autenticados pueden ver)
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { marca, activo } = req.query;
-    
-    let query = 'SELECT * FROM presupuestos WHERE 1=1';
+    const { marca } = req.query;
+    let query = 'SELECT * FROM presupuestos WHERE activo = 1';
     const params = [];
-    
-    // Filtrar por marca si se proporciona
-    if (marca && ['vw', 'fiat', 'peugeot', 'renault'].includes(marca)) {
+    // Filtro opcional por marca de vehículo (GoldPlan es multimarca)
+    if (marca && MARCAS_VALIDAS.includes(marca)) {
       query += ' AND marcaVehiculo = ?';
       params.push(marca);
     }
-    
-    // Filtrar por activo (por defecto solo los activos)
-    if (activo !== undefined) {
-      query += ' AND activo = ?';
-      params.push(activo === 'true' ? 1 : 0);
-    } else {
-      query += ' AND activo = 1';
-    }
-    
-    query += ' ORDER BY created_at DESC';
-    
-    const [rows] = await pool.execute(query, params);
-    res.json(rows);
+    query += ' ORDER BY marcaVehiculo, marca, modelo';
+    const [plantillas] = await pool.execute(query, params);
+    res.json({ ok: true, plantillas });
   } catch (error) {
     console.error('Error GET /presupuestos:', error);
-    res.status(500).json({ 
-      error: 'Error al obtener presupuestos',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Error al obtener plantillas' });
   }
 });
 
-// GET un presupuesto específico
+// GET una plantilla específica
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.execute(
-      'SELECT * FROM presupuestos WHERE id = ?',
+    const [plantillas] = await pool.execute(
+      'SELECT * FROM presupuestos WHERE id = ? AND activo = 1',
       [req.params.id]
     );
-    
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Presupuesto no encontrado' });
+
+    if (plantillas.length === 0) {
+      return res.status(404).json({ error: 'Plantilla no encontrada' });
     }
-    
-    res.json(rows[0]);
+
+    res.json({ ok: true, plantilla: plantillas[0] });
   } catch (error) {
     console.error('Error GET /presupuestos/:id:', error);
-    res.status(500).json({ 
-      error: 'Error al obtener presupuesto',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Error al obtener plantilla' });
   }
 });
 
-// POST crear presupuesto
+// POST crear plantilla (solo Owner)
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    // Solo owner puede crear presupuestos
-    if (!['owner', 'dueño'].includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para crear presupuestos' 
+    const userId = req.user.userId || req.user.id;
+
+    if (!(await isOwner(userId))) {
+      return res.status(403).json({
+        error: 'Solo el Dueño puede crear plantillas de presupuesto'
       });
     }
 
-    const {
-      modelo,
-      marca,
-      marcaVehiculo = null,
-      imagen_url = null,
-      precio_contado = null,
-      especificaciones_tecnicas = null,
-      planes_cuotas = null,
-      bonificaciones = null,
-      anticipo = null,
-      activo = true
-    } = req.body;
-
-    // Validaciones
-    if (!modelo || !marca) {
-      return res.status(400).json({ 
-        error: 'Modelo y marca son obligatorios' 
-      });
-    }
-
-    if (marcaVehiculo && !['vw', 'fiat', 'peugeot', 'renault'].includes(marcaVehiculo)) {
-      return res.status(400).json({ 
-        error: 'Marca de vehículo inválida. Debe ser: vw, fiat, peugeot o renault' 
-      });
-    }
-
-    // Convertir planes_cuotas a JSON si es necesario
-    const planes_cuotas_json = planes_cuotas ? JSON.stringify(planes_cuotas) : null;
-
-    const [result] = await pool.execute(
-      `INSERT INTO presupuestos 
-        (modelo, marca, marcaVehiculo, imagen_url, precio_contado, 
-         especificaciones_tecnicas, planes_cuotas, bonificaciones, 
-         anticipo, activo, created_by, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        modelo,
-        marca,
-        marcaVehiculo,
-        imagen_url,
-        precio_contado,
-        especificaciones_tecnicas,
-        planes_cuotas_json,
-        bonificaciones,
-        anticipo,
-        activo ? 1 : 0,
-        req.user.id
-      ]
-    );
-
-    // Obtener el presupuesto recién creado
-    const [rows] = await pool.execute(
-      'SELECT * FROM presupuestos WHERE id = ?',
-      [result.insertId]
-    );
-
-    res.status(201).json(rows[0]);
-  } catch (error) {
-    console.error('Error POST /presupuestos:', error);
-    res.status(500).json({ 
-      error: 'Error al crear presupuesto',
-      details: error.message 
-    });
-  }
-});
-
-// PUT actualizar presupuesto
-router.put('/:id', authenticateToken, async (req, res) => {
-  try {
-    // Solo owner puede actualizar presupuestos
-    if (!['owner', 'dueño'].includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para actualizar presupuestos' 
-      });
-    }
-
-    const { id } = req.params;
     const {
       modelo,
       marca,
@@ -155,133 +85,166 @@ router.put('/:id', authenticateToken, async (req, res) => {
       especificaciones_tecnicas,
       planes_cuotas,
       bonificaciones,
-      anticipo,
-      activo
+      anticipo
     } = req.body;
 
-    // Verificar que existe
-    const [existing] = await pool.execute(
-      'SELECT * FROM presupuestos WHERE id = ?',
-      [id]
-    );
-
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Presupuesto no encontrado' });
+    if (!modelo || !marca) {
+      return res.status(400).json({ error: 'Modelo y marca son obligatorios' });
     }
 
-    if (marcaVehiculo && !['vw', 'fiat', 'peugeot', 'renault'].includes(marcaVehiculo)) {
-      return res.status(400).json({ 
-        error: 'Marca de vehículo inválida. Debe ser: vw, fiat, peugeot o renault' 
+    if (marcaVehiculo && !MARCAS_VALIDAS.includes(marcaVehiculo)) {
+      return res.status(400).json({
+        error: 'Marca de vehículo inválida. Debe ser: vw, fiat, peugeot o renault'
       });
     }
 
-    // Construir query dinámico
-    const updates = [];
+    const [result] = await pool.execute(
+      `INSERT INTO presupuestos
+       (modelo, marca, marcaVehiculo, imagen_url, precio_contado, especificaciones_tecnicas,
+        planes_cuotas, bonificaciones, anticipo, activo, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW())`,
+      [
+        modelo,
+        marca,
+        marcaVehiculo || null,
+        imagen_url || null,
+        precio_contado || null,
+        especificaciones_tecnicas || null,
+        planes_cuotas ? JSON.stringify(planes_cuotas) : null,
+        bonificaciones || null,
+        anticipo || null,
+        userId
+      ]
+    );
+
+    const [newPlantilla] = await pool.execute(
+      'SELECT * FROM presupuestos WHERE id = ?',
+      [result.insertId]
+    );
+
+    res.json({ ok: true, plantilla: newPlantilla[0] });
+  } catch (error) {
+    console.error('Error POST /presupuestos:', error);
+    res.status(500).json({ error: 'Error al crear plantilla' });
+  }
+});
+
+// PUT actualizar plantilla (solo Owner)
+router.put('/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+
+    if (!(await isOwner(userId))) {
+      return res.status(403).json({
+        error: 'Solo el Dueño puede editar plantillas de presupuesto'
+      });
+    }
+
+    const { id } = req.params;
+    const updates = req.body;
+
+    if (updates.marcaVehiculo && !MARCAS_VALIDAS.includes(updates.marcaVehiculo)) {
+      return res.status(400).json({
+        error: 'Marca de vehículo inválida. Debe ser: vw, fiat, peugeot o renault'
+      });
+    }
+
+    const allowedFields = [
+      'modelo', 'marca', 'marcaVehiculo', 'imagen_url', 'precio_contado',
+      'especificaciones_tecnicas', 'planes_cuotas', 'bonificaciones',
+      'anticipo', 'activo'
+    ];
+
+    const setClause = [];
     const values = [];
 
-    if (modelo !== undefined) {
-      updates.push('modelo = ?');
-      values.push(modelo);
-    }
-    if (marca !== undefined) {
-      updates.push('marca = ?');
-      values.push(marca);
-    }
-    if (marcaVehiculo !== undefined) {
-      updates.push('marcaVehiculo = ?');
-      values.push(marcaVehiculo);
-    }
-    if (imagen_url !== undefined) {
-      updates.push('imagen_url = ?');
-      values.push(imagen_url);
-    }
-    if (precio_contado !== undefined) {
-      updates.push('precio_contado = ?');
-      values.push(precio_contado);
-    }
-    if (especificaciones_tecnicas !== undefined) {
-      updates.push('especificaciones_tecnicas = ?');
-      values.push(especificaciones_tecnicas);
-    }
-    if (planes_cuotas !== undefined) {
-      updates.push('planes_cuotas = ?');
-      values.push(planes_cuotas ? JSON.stringify(planes_cuotas) : null);
-    }
-    if (bonificaciones !== undefined) {
-      updates.push('bonificaciones = ?');
-      values.push(bonificaciones);
-    }
-    if (anticipo !== undefined) {
-      updates.push('anticipo = ?');
-      values.push(anticipo);
-    }
-    if (activo !== undefined) {
-      updates.push('activo = ?');
-      values.push(activo ? 1 : 0);
+    for (const [key, value] of Object.entries(updates)) {
+      if (allowedFields.includes(key)) {
+        if (key === 'planes_cuotas' && typeof value === 'object') {
+          setClause.push(`${key} = ?`);
+          values.push(JSON.stringify(value));
+        } else {
+          setClause.push(`${key} = ?`);
+          values.push(value);
+        }
+      }
     }
 
-    if (updates.length === 0) {
+    if (setClause.length === 0) {
       return res.status(400).json({ error: 'No hay campos para actualizar' });
     }
 
-    updates.push('updated_at = NOW()');
     values.push(id);
 
     await pool.execute(
-      `UPDATE presupuestos SET ${updates.join(', ')} WHERE id = ?`,
+      `UPDATE presupuestos SET ${setClause.join(', ')}, updated_at = NOW() WHERE id = ?`,
       values
     );
 
-    // Obtener el presupuesto actualizado
-    const [rows] = await pool.execute(
+    const [updated] = await pool.execute(
       'SELECT * FROM presupuestos WHERE id = ?',
       [id]
     );
 
-    res.json(rows[0]);
+    res.json({ ok: true, plantilla: updated[0] });
   } catch (error) {
     console.error('Error PUT /presupuestos/:id:', error);
-    res.status(500).json({ 
-      error: 'Error al actualizar presupuesto',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Error al actualizar plantilla' });
   }
 });
 
-// DELETE eliminar presupuesto
+// DELETE plantilla (solo Owner - soft delete, igual que ALRA)
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    // Solo owner puede eliminar presupuestos
-    if (!['owner', 'dueño'].includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para eliminar presupuestos' 
+    const userId = req.user.userId || req.user.id;
+
+    if (!(await isOwner(userId))) {
+      return res.status(403).json({
+        error: 'Solo el Dueño puede eliminar plantillas de presupuesto'
       });
     }
 
     const { id } = req.params;
 
-    // Verificar que existe
-    const [existing] = await pool.execute(
-      'SELECT * FROM presupuestos WHERE id = ?',
+    await pool.execute(
+      'UPDATE presupuestos SET activo = 0, updated_at = NOW() WHERE id = ?',
       [id]
     );
 
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Presupuesto no encontrado' });
-    }
-
-    await pool.execute('DELETE FROM presupuestos WHERE id = ?', [id]);
-
-    res.json({ 
-      message: 'Presupuesto eliminado exitosamente',
-      id: parseInt(id)
-    });
+    res.json({ ok: true, message: 'Plantilla eliminada exitosamente' });
   } catch (error) {
     console.error('Error DELETE /presupuestos/:id:', error);
-    res.status(500).json({ 
-      error: 'Error al eliminar presupuesto',
-      details: error.message 
+    res.status(500).json({ error: 'Error al eliminar plantilla' });
+  }
+});
+
+// POST generar PDF del presupuesto
+router.post('/generar-pdf', authenticateToken, async (req, res) => {
+  try {
+    if (!generarPresupuestoPDF) {
+      return res.status(501).json({ error: 'Generador de PDF no instalado en este servidor (falta services/pdfGenerator.js)' });
+    }
+
+    console.log(`User ${req.user.username || 'unknown'} (ID: ${req.user.userId || req.user.id}) accessing POST /generar-pdf`);
+
+    const { filePath, fileName } = await generarPresupuestoPDF(req.body);
+
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+      }
+      fs.unlink(filePath, (unlinkErr) => {
+        if (unlinkErr) {
+          console.error('Error deleting temp file:', unlinkErr);
+        } else {
+          console.log('Temp file deleted successfully:', fileName);
+        }
+      });
     });
+
+  } catch (error) {
+    console.error('Error POST /presupuestos/generar-pdf:', error);
+    res.status(500).json({ error: 'Error al generar PDF' });
   }
 });
 
