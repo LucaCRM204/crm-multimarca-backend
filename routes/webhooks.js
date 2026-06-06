@@ -1945,7 +1945,7 @@ router.post('/bot-lead-update', async (req, res) => {
       sets.push('marca = ?'); vals.push(String(marca).toLowerCase());
     }
     if (notas !== undefined && notas !== null) { sets.push('notas = ?'); vals.push(String(notas)); }
-    if (sets.length === 0) return res.status(400).json({ error: 'Nada para actualizar' });
+    if (sets.length === 0) return res.json({ ok: true, updated: 0, noop: true });
     vals.push(parseInt(leadId));
     const [r] = await pool.execute(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, vals);
     console.log(`🔄 [BOT-UPDATE] Lead ${leadId} actualizado:`, JSON.stringify({ nombre, modelo, marca }));
