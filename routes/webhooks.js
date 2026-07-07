@@ -1930,6 +1930,19 @@ router.post('/sheets-gle-santiago', async (req, res) => {
   await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
 });
 
+// Fast Leads → Santiago De Torres (equipo Martin Favier 116)
+router.post('/sheets-fastleads-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'Fast Leads', () => santiagoFastIdx, v => { santiagoFastIdx = v; });
+});
+
+// Link Media → Santiago De Torres (equipo Martin Favier 116)
+let santiagoLinkIdx = 0;
+router.post('/sheets-linkmedia-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-linkmedia-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'Link Media', () => santiagoLinkIdx, v => { santiagoLinkIdx = v; });
+});
+
 // ========= Bot: actualización progresiva de leads (espejo de ALRA) =========
 router.post('/bot-lead-update', async (req, res) => {
   try {
