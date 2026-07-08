@@ -1734,7 +1734,68 @@ function crearEndpointGoldplanPool(opts) {
 crearEndpointGoldplanPool({ ruta: '/goldplan-pool-mastropasqua', sheetKey: 'goldplan-pool-mastropasqua-2026', fuente: 'Mastropasqua' });
 crearEndpointGoldplanPool({ ruta: '/goldplan-pool-osvaldo',      sheetKey: 'goldplan-pool-osvaldo-2026',      fuente: 'Osvaldo' });
 crearEndpointGoldplanPool({ ruta: '/goldplan-pool-fastleads',    sheetKey: 'goldplan-pool-fastleads-2026',    fuente: 'Fast Leads' });
-crearEndpointGoldplanPool({ ruta: '/goldplan-pool-emanuel',      sheetKey: 'goldplan-pool-emanuel-2026',      fuente: 'Emanuel' });
+
+// ============================================================
+// EMANUEL → equipo David (gerente 457) - EXCLUSIVO
+// Reemplaza al pool 9:5:5 para esta fuente. Misma URL y key,
+// así el Apps Script de la planilla no cambia.
+// ============================================================
+let emanuelDavidIndex = 0;
+router.post('/goldplan-pool-emanuel', async (req, res) => {
+  try {
+    const key = req.headers['x-sheet-key'];
+    if (key !== 'goldplan-pool-emanuel-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, localidad, notas, correo } = req.body;
+    console.log('[Emanuel-David] Recibido:', JSON.stringify(req.body));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({ error: 'Nombre y telefono son requeridos', received: { nombre, telefono } });
+    }
+
+    const vendedores = await getVendedoresDeEquipo(457);
+    if (!vendedores || vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en equipo David (457)' });
+    }
+    const vendedor = vendedores[emanuelDavidIndex % vendedores.length];
+    emanuelDavidIndex = (emanuelDavidIndex + 1) % vendedores.length;
+    const assigned_to = vendedor.id;
+
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (correo)    notasArr.push('Mail: ' + correo);
+    if (notas)     notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'fiat').toString().toLowerCase();
+
+    const [ins] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Emanuel', ?, ?, NOW())`,
+      [nombre || '', telefono || '', modelo || 'Consultar', marcaFinal, notasFinal, assigned_to]
+    );
+
+    console.log(`[Emanuel-David] Lead #${ins.insertId} -> David: ${vendedor.name} (${assigned_to})`);
+
+    res.json({
+      ok: true,
+      leadId: ins.insertId,
+      vendedor: vendedor.name,
+      assignedTo: assigned_to,
+      equipo: 'David',
+      fuente: 'Emanuel'
+    });
+  } catch (error) {
+    console.error('[Emanuel-David] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+// [MOVIDO] Emanuel salió del pool 9:5:5 → ahora va exclusivo al gerente David (457), ver ruta dedicada abajo
+// crearEndpointGoldplanPool({ ruta: '/goldplan-pool-emanuel',      sheetKey: 'goldplan-pool-emanuel-2026',      fuente: 'Emanuel' });
 
 
 
@@ -1928,19 +1989,6 @@ router.post('/sheets-fastleads-general', async (req, res) => {
 router.post('/sheets-gle-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-gle-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
   await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
-});
-
-// Fast Leads → Santiago De Torres (equipo Martin Favier 116)
-router.post('/sheets-fastleads-santiago', async (req, res) => {
-  if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'Fast Leads', () => santiagoFastIdx, v => { santiagoFastIdx = v; });
-});
-
-// Link Media → Santiago De Torres (equipo Martin Favier 116)
-let santiagoLinkIdx = 0;
-router.post('/sheets-linkmedia-santiago', async (req, res) => {
-  if (req.headers['x-sheet-key'] !== 'goldplan-linkmedia-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'Link Media', () => santiagoLinkIdx, v => { santiagoLinkIdx = v; });
 });
 
 // ========= Bot: actualización progresiva de leads (espejo de ALRA) =========
