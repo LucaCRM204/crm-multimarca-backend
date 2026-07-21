@@ -2017,4 +2017,83 @@ router.post('/bot-lead-update', async (req, res) => {
   }
 });
 
+// ========= Webhook: Zapier — Equipo JOSE LUIS TRENCH (507) =========
+// Round-robin entre los vendedores activos que cuelgan de Trench (CTE recursivo).
+// Pool actual (9): Figueroa 509, Flores 510, Ortega 511, Rogna 512, Bedetti 514,
+//                  Romano 515, Forte 516, Medina 517, Soria 518
+// Header requerido: x-zapier-key: goldplan-trench-2026
+const TRENCH_ID = 507;
+let trenchIndex = 0;
+
+router.post('/zap-trench', async (req, res) => {
+  try {
+    if (req.headers['x-zapier-key'] !== 'goldplan-trench-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
+
+    console.log('[Zap Trench] Recibido:', JSON.stringify(req.body, null, 2));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const vendedores = await getVendedoresDeEquipo(TRENCH_ID);
+    if (vendedores.length === 0) {
+      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Jose Luis Trench' });
+    }
+
+    const vendedor = vendedores[trenchIndex % vendedores.length];
+    trenchIndex = (trenchIndex + 1) % vendedores.length;
+    const assigned_to = vendedor.id;
+
+    const notasArr = [];
+    if (localidad) notasArr.push('Localidad: ' + localidad);
+    if (notas)     notasArr.push(notas);
+    const notasFinal = notasArr.join(' | ');
+
+    const marcaFinal = (marca || 'vw').toString().toLowerCase();
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+        (?, ?, ?, ?, 'Consultar', 'nuevo', 'Alessio Formularios', ?, ?, NOW())`,
+      [
+        nombre   || '',
+        telefono || '',
+        modelo   || 'Consultar',
+        marcaFinal,
+        notasFinal,
+        assigned_to
+      ]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+
+    console.log(`[Zap Trench] Lead #${result.insertId} -> ${vendedor.name} (${assigned_to}) | pool: ${vendedores.length}`);
+
+    res.json({
+      ok: true,
+      lead: leadRows[0] || null,
+      leadId: result.insertId,
+      message: `Lead asignado a ${vendedor.name}`,
+      assignedTo: assigned_to,
+      vendedor: vendedor.name,
+      equipo: 'Trench',
+      fuente: 'Alessio Formularios',
+      pool: vendedores.length
+    });
+
+  } catch (error) {
+    console.error('[Zap Trench] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+
 module.exports = router;
