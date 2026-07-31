@@ -2084,14 +2084,34 @@ router.post('/zap-trench', async (req, res) => {
       });
     }
 
-    const vendedores = await getVendedoresDeEquipo(TRENCH_ID);
-    if (vendedores.length === 0) {
-      return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Jose Luis Trench' });
+    // ⬇️ MODIFICADO: usa la cascada de porcentajes de Trench.
+    // Si el equipo 507 no esta registrado en distribucion_equipos,
+    // o si algo falla, cae solo a la rotacion pareja de siempre.
+    let assigned_to = null;
+    let vendedorNombre = '';
+    let poolSize = 0;
+
+    try {
+      const r = await dist.siguienteVendedor(TRENCH_ID, null, 'Alessio Formularios');
+      if (r.gestionado && r.userId) assigned_to = r.userId;
+    } catch (e) {
+      console.error('[Zap Trench] Distribucion fallo, uso rotacion:', e.message);
     }
 
-    const vendedor = vendedores[trenchIndex % vendedores.length];
-    trenchIndex = (trenchIndex + 1) % vendedores.length;
-    const assigned_to = vendedor.id;
+    if (!assigned_to) {
+      const vendedores = await getVendedoresDeEquipo(TRENCH_ID);
+      if (vendedores.length === 0) {
+        return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Jose Luis Trench' });
+      }
+      const vendedor = vendedores[trenchIndex % vendedores.length];
+      trenchIndex = (trenchIndex + 1) % vendedores.length;
+      assigned_to = vendedor.id;
+      vendedorNombre = vendedor.name;
+      poolSize = vendedores.length;
+    } else {
+      const [[u]] = await pool.execute('SELECT name FROM users WHERE id = ?', [assigned_to]);
+      vendedorNombre = u ? u.name : String(assigned_to);
+    }
 
     const notasArr = [];
     if (localidad) notasArr.push('Localidad: ' + localidad);
@@ -2117,18 +2137,18 @@ router.post('/zap-trench', async (req, res) => {
 
     const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
 
-    console.log(`[Zap Trench] Lead #${result.insertId} -> ${vendedor.name} (${assigned_to}) | pool: ${vendedores.length}`);
+    console.log(`[Zap Trench] Lead #${result.insertId} -> ${vendedorNombre} (${assigned_to})`);
 
     res.json({
       ok: true,
       lead: leadRows[0] || null,
       leadId: result.insertId,
-      message: `Lead asignado a ${vendedor.name}`,
+      message: `Lead asignado a ${vendedorNombre}`,
       assignedTo: assigned_to,
-      vendedor: vendedor.name,
+      vendedor: vendedorNombre,
       equipo: 'Trench',
       fuente: 'Alessio Formularios',
-      pool: vendedores.length
+      pool: poolSize
     });
 
   } catch (error) {
