@@ -1,6 +1,7 @@
 ﻿const express = require('express');
 const pool = require('../db');
 const { getAssignedVendorByBrand } = require('../utils/assign');
+const dist = require('../services/distribucion.service'); // distribucion ponderada
 const router = express.Router();
 
 // ========= Índices Round Robin para Sheets =========
@@ -173,9 +174,31 @@ let santiagoEmanuelIdx = 0, santiagoFastIdx = 0, santiagoGleIdx = 0, fastleadsGe
 // Round-robin por equipo
 let roundRobinIndex = {};
 
-async function assignVendorInTeam(equipoId) {
+// ⬇️ MODIFICADO: ahora reparte por porcentaje en vez de rotacion pareja.
+// Misma firma y mismo valor de retorno, asi los lugares que la llaman
+// no cambian. Si la distribucion falla, cae sola al metodo viejo.
+async function assignVendorInTeam(equipoId, leadId = null, fuente = null) {
+  try {
+    const vendedorId = await dist.siguienteVendedor(equipoId, leadId, fuente);
+
+    if (!vendedorId) {
+      console.error('❌ No hay vendedores disponibles en el equipo:', equipoId);
+      return null;
+    }
+
+    console.log(`🎯 Equipo ${equipoId}: asignado a vendedor ${vendedorId} (por %)`);
+    return vendedorId;
+  } catch (e) {
+    console.error('⚠️ Distribucion fallo, uso rotacion vieja:', e.message);
+    return assignVendorInTeamLegacy(equipoId);
+  }
+}
+
+// Red de emergencia: es el codigo que tenias antes, sin tocar.
+// Cuando lleves un mes sin ver el warning de arriba, borrala.
+async function assignVendorInTeamLegacy(equipoId) {
   const vendedores = await getVendedoresDeEquipo(equipoId);
-  
+
   if (vendedores.length === 0) {
     console.error('❌ No hay vendedores disponibles en el equipo:', equipoId);
     return null;

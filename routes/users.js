@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const bcrypt = require('bcryptjs');
+const dist = require('../services/distribucion.service'); // distribucion ponderada
 const router = express.Router();
 
 // GET /users  → lista usuarios
@@ -29,6 +30,11 @@ router.post('/', async (req, res) => {
       [name, email, hashedPassword, role, reportsTo, active ? 1 : 0]
     );
     const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active FROM users WHERE id=?', [r.insertId]);
+
+    // Entra al reparto de su equipo y los porcentajes se reacomodan solos.
+    try { await dist.invalidarPorUsuario(r.insertId); }
+    catch (e) { console.error('[USERS CREATE] resync distribucion:', e.message); }
+
     res.status(201).json(row[0]);
   } catch (e) {
     console.error('[USERS CREATE]', e);
@@ -59,6 +65,14 @@ router.put('/:id', async (req, res) => {
     if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
     vals.push(id);
     await pool.query(`UPDATE users SET ${sets.join(',')} WHERE id=?`, vals);
+
+    // Si lo desactivaron, lo reactivaron o lo cambiaron de equipo,
+    // sale/entra del reparto en el acto y los demas se reacomodan.
+    if ('active' in req.body || 'reportsTo' in req.body || 'role' in req.body) {
+      try { await dist.invalidarPorUsuario(id); }
+      catch (e) { console.error('[USERS UPDATE] resync distribucion:', e.message); }
+    }
+
     const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active FROM users WHERE id=?', [id]);
     res.json(row[0]);
   } catch (e) {
@@ -70,7 +84,17 @@ router.put('/:id', async (req, res) => {
 // DELETE /users/:id  → eliminar usuario
 router.delete('/:id', async (req, res) => {
   try {
+    // Hay que leer su equipo ANTES de borrarlo, despues ya no existe.
+    const [[prev]] = await pool.query('SELECT reportsTo FROM users WHERE id=?', [req.params.id]);
+
     await pool.query('DELETE FROM users WHERE id=?', [req.params.id]);
+    await pool.query('DELETE FROM distribucion_pesos WHERE user_id=?', [req.params.id]);
+
+    if (prev?.reportsTo) {
+      try { await dist.sincronizarEquipo(prev.reportsTo); }
+      catch (e) { console.error('[USERS DELETE] resync distribucion:', e.message); }
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error('[USERS DELETE]', e);
