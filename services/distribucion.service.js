@@ -147,6 +147,54 @@ function elegirSiguiente(rows) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Devuelve la config del equipo, o null si no está gestionado.
+ * Si es null, el webhook debe caer al round-robin de siempre.
+ */
+async function getConfigEquipo(liderId, conn = pool) {
+  const [rows] = await conn.query(
+    `SELECT lider_id, modo, activo FROM distribucion_equipos
+      WHERE lider_id = ? AND activo = 1 LIMIT 1`,
+    [liderId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Hijos directos que son nodos de reparto: supervisores/gerentes que
+ * tengan al menos un vendedor colgando. Se usa en modo cascada.
+ * Los supervisores sin vendedores quedan afuera — si entraran, sus
+ * leads se perderían.
+ */
+async function getSubEquipos(liderId, conn = pool) {
+  const [rows] = await conn.query(
+    `SELECT s.id, s.name, s.role,
+            (SELECT COUNT(*) FROM users v
+              WHERE v.reportsTo = s.id AND v.active = 1 AND v.role = ?) AS vendedores
+       FROM users s
+      WHERE s.reportsTo = ? AND s.active = 1 AND s.role <> ?
+      HAVING vendedores > 0
+      ORDER BY s.id`,
+    [ROL_VENDEDOR, liderId, ROL_VENDEDOR]
+  );
+  return rows;
+}
+
+/**
+ * Quiénes componen el reparto de este scope.
+ *   plano   -> todos los vendedores del árbol
+ *   cascada -> los sub-equipos (supervisores con gente)
+ * Si en cascada no hay sub-equipos, cae a vendedores directos.
+ */
+async function getMiembrosDeReparto(liderId, modo, conn = pool) {
+  if (modo === 'cascada') {
+    const subs = await getSubEquipos(liderId, conn);
+    if (subs.length) return { tipo: 'equipos', miembros: subs };
+  }
+  const vend = await getVendedoresDeEquipo(liderId, conn);
+  return { tipo: 'vendedores', miembros: vend };
+}
+
+/**
  * Vendedores activos bajo un líder, a cualquier profundidad.
  * Equivalente a getVendedoresDeEquipo() de webhooks.js, más el
  * filtro de contenedores.
@@ -184,8 +232,14 @@ async function sincronizarEquipo(equipoId, conn = null) {
     if (propia) await c.beginTransaction();
 
     const scope = scopeDe(equipoId);
-    const equipo = await getVendedoresDeEquipo(equipoId, c);
-    const esperados = new Set(equipo.map((v) => v.id));
+    const cfg = await getConfigEquipo(equipoId, c);
+    if (!cfg) {
+      // Equipo no gestionado: no se toca nada.
+      if (propia) await c.commit();
+      return false;
+    }
+    const { miembros } = await getMiembrosDeReparto(equipoId, cfg.modo, c);
+    const esperados = new Set(miembros.map((v) => v.id));
 
     const [actuales] = await c.query(
       `SELECT * FROM distribucion_pesos WHERE scope = ? FOR UPDATE`,
@@ -277,10 +331,7 @@ async function persistirPesos(conn, rows) {
 /** Sincroniza todos los equipos. Para el backfill y el cron. */
 async function sincronizarTodos() {
   const [lideres] = await pool.query(
-    `SELECT DISTINCT reportsTo AS id
-       FROM users
-      WHERE role = ? AND active = 1 AND reportsTo IS NOT NULL`,
-    [ROL_VENDEDOR]
+    `SELECT lider_id AS id FROM distribucion_equipos WHERE activo = 1`
   );
   let cambiados = 0;
   for (const l of lideres) {
@@ -465,67 +516,117 @@ async function repartirParejo(equipoId) {
 }
 
 /**
- * A quién le toca el próximo lead del equipo.
- * Este es el reemplazo de assignVendorInTeam().
- *
- * Doble red: el sync mantiene la tabla al día, y además se vuelve a
- * chequear contra users.active en el momento de elegir. Aunque el sync
- * esté desfasado, a un desactivado no le puede caer un lead.
- *
- * Devuelve el user_id, o null si el equipo no tiene a nadie.
+ * Elige un miembro del scope y devuelve su id, o null si no hay nadie.
+ * Es un paso de la cascada: el elegido puede ser un vendedor o un
+ * supervisor, según cómo esté armado ese scope.
  */
-async function siguienteVendedor(equipoId, leadId = null, fuente = null) {
-  await sincronizarSiHaceFalta(equipoId);
-  const scope = scopeDe(equipoId);
+async function elegirEnScope(conn, scope, idsHabilitados) {
+  if (!idsHabilitados.length) return null;
 
-  // Lectura sin lock, para no bloquear la tabla users.
-  const [habilitados] = await pool.query(
+  const marks = idsHabilitados.map(() => '?').join(',');
+  const [raw] = await conn.query(
+    `SELECT * FROM distribucion_pesos
+      WHERE scope = ? AND user_id IN (${marks}) FOR UPDATE`,
+    [scope, ...idsHabilitados]
+  );
+
+  const { elegido, rows } = elegirSiguiente(raw);
+  if (!elegido) return null;
+
+  for (const r of rows) {
+    await conn.query(`UPDATE distribucion_pesos SET current_weight = ? WHERE id = ?`, [
+      r.current_weight,
+      r.id,
+    ]);
+  }
+  await conn.query(
+    `UPDATE distribucion_pesos
+        SET asignados_total = asignados_total + 1,
+            asignados_mes  = asignados_mes + 1
+      WHERE id = ?`,
+    [elegido.id]
+  );
+  return elegido;
+}
+
+/** Miembros del scope que pueden recibir ahora mismo (doble chequeo). */
+async function idsHabilitados(scope) {
+  const [rows] = await pool.query(
     `SELECT d.user_id
        FROM distribucion_pesos d
        JOIN users u ON u.id = d.user_id
       WHERE d.scope = ? AND d.activo = 1 AND d.pausado = 0 AND u.active = 1`,
     [scope]
   );
-  const ids = habilitados.map((r) => r.user_id).filter((id) => !EXCLUIDOS.has(id));
-  if (!ids.length) return null;
+  return rows.map((r) => r.user_id).filter((id) => !EXCLUIDOS.has(id));
+}
+
+/**
+ * A quién le toca el próximo lead.
+ *
+ * Devuelve { gestionado, userId }:
+ *   gestionado = false -> este equipo NO usa distribución por porcentaje.
+ *                         El webhook debe caer al round-robin de siempre.
+ *   gestionado = true  -> userId es el vendedor elegido (o null si el
+ *                         equipo está gestionado pero quedó sin nadie).
+ *
+ * En modo cascada baja nivel por nivel: elige supervisor por porcentaje,
+ * después vendedor por porcentaje dentro de ese supervisor.
+ */
+async function siguienteVendedor(equipoId, leadId = null, fuente = null) {
+  const cfg = await getConfigEquipo(equipoId);
+  if (!cfg) return { gestionado: false, userId: null };
+
+  await sincronizarSiHaceFalta(equipoId);
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const marks = ids.map(() => '?').join(',');
-    const [raw] = await conn.query(
-      `SELECT * FROM distribucion_pesos
-        WHERE scope = ? AND user_id IN (${marks}) FOR UPDATE`,
-      [scope, ...ids]
-    );
 
-    const { elegido, rows } = elegirSiguiente(raw);
+    let nodo = Number(equipoId);
+    let elegido = null;
+    const camino = [];
+
+    for (let nivel = 0; nivel < PROFUNDIDAD_MAX; nivel++) {
+      const scope = scopeDe(nodo);
+      const ids = await idsHabilitados(scope);
+
+      elegido = await elegirEnScope(conn, scope, ids);
+      if (!elegido) break;
+
+      camino.push({ scope, userId: elegido.user_id, peso: elegido.peso });
+
+      // ¿El elegido es un vendedor, o un supervisor por el que hay que bajar?
+      const [[u]] = await conn.query(`SELECT role FROM users WHERE id = ?`, [
+        elegido.user_id,
+      ]);
+      if (!u || u.role === ROL_VENDEDOR) break;
+
+      // Es un sub-equipo: se baja un nivel.
+      const subCfg = await getConfigEquipo(elegido.user_id, conn);
+      if (!subCfg) break; // sub-equipo sin configurar, se corta acá
+      nodo = elegido.user_id;
+      elegido = null;
+
+      // El scope de abajo puede no existir todavía.
+      await sincronizarEquipo(nodo, conn);
+    }
+
     if (!elegido) {
       await conn.commit();
-      return null;
+      return { gestionado: true, userId: null };
     }
 
-    for (const r of rows) {
-      await conn.query(`UPDATE distribucion_pesos SET current_weight = ? WHERE id = ?`, [
-        r.current_weight,
-        r.id,
-      ]);
+    for (const paso of camino) {
+      await conn.query(
+        `INSERT INTO distribucion_log (scope, lead_id, user_id, peso, fuente)
+         VALUES (?, ?, ?, ?, ?)`,
+        [paso.scope, leadId, paso.userId, paso.peso, fuente]
+      );
     }
-    await conn.query(
-      `UPDATE distribucion_pesos
-          SET asignados_total = asignados_total + 1,
-              asignados_mes  = asignados_mes + 1
-        WHERE id = ?`,
-      [elegido.id]
-    );
-    await conn.query(
-      `INSERT INTO distribucion_log (scope, lead_id, user_id, peso, fuente)
-       VALUES (?, ?, ?, ?, ?)`,
-      [scope, leadId, elegido.user_id, elegido.peso, fuente]
-    );
 
     await conn.commit();
-    return elegido.user_id;
+    return { gestionado: true, userId: elegido.user_id };
   } catch (e) {
     await conn.rollback();
     console.error(`[distribucion] siguienteVendedor ${equipoId}:`, e.message);
@@ -554,6 +655,9 @@ module.exports = {
   elegirSiguiente,
   // jerarquía
   getVendedoresDeEquipo,
+  getConfigEquipo,
+  getSubEquipos,
+  getMiembrosDeReparto,
   sincronizarEquipo,
   sincronizarTodos,
   invalidarPorUsuario,
