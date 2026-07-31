@@ -160,6 +160,34 @@ app.get('/', (_req, res) => res.json({
 const io = initSocketServer(server, pool);
 app.set('io', io);
 
+// ============================================
+// CRON: mantenimiento de la distribucion de leads
+// Requiere: npm i node-cron
+// ============================================
+const cron = require('node-cron');
+const dist = require('./services/distribucion.service');
+
+// Cada 15 min: realinea los equipos por si algun cambio de jerarquia
+// se escapo (deploy a mitad de camino, edicion directa en la base, etc).
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    const n = await dist.sincronizarTodos();
+    if (n) console.log(`⚖️  Distribucion: ${n} equipos realineados`);
+  } catch (e) {
+    console.error('[cron] distribucion:', e.message);
+  }
+});
+
+// El 1° de cada mes a las 00:00: resetea el contador "recibidos este mes".
+cron.schedule('0 0 1 * *', async () => {
+  try {
+    await dist.resetMensual();
+    console.log('⚖️  Distribucion: contadores mensuales reseteados');
+  } catch (e) {
+    console.error('[cron] reset mensual:', e.message);
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 
 server.listen(PORT, () => {
@@ -168,5 +196,6 @@ server.listen(PORT, () => {
   console.log(`📊 Reportes de actividad disponibles`);
   console.log(`📋 Módulo de Scoring activo`);
   console.log(`🎯 Módulo de Metas activo`);
-  console.log(`💬 WhatsApp Chat activo\n`);
+  console.log(`💬 WhatsApp Chat activo`);
+  console.log(`⚖️  Distribucion ponderada activa\n`);
 });
