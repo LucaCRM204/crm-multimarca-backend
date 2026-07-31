@@ -199,6 +199,19 @@ async function sincronizarEquipo(equipoId, conn = null) {
     const salen = [...activosAhora].filter((id) => !esperados.has(id));
 
     if (!entran.length && !salen.length) {
+      // Aunque no haya altas ni bajas, los pesos pueden no sumar 100.
+      // Pasa justo después del backfill inicial, donde los valores
+      // vienen de users.lead_percentage sin normalizar.
+      const vivos = actuales.filter((r) => r.activo);
+      const dentro = vivos.filter((r) => !r.pausado);
+      const sumaActual = suma(dentro, (r) => Number(r.peso));
+
+      if (dentro.length && Math.abs(sumaActual - TOTAL) > 0.01) {
+        await persistirPesos(c, normalizar(vivos));
+        if (propia) await c.commit();
+        return true;
+      }
+
       if (propia) await c.commit();
       return false;
     }
