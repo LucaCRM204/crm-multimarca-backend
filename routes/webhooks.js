@@ -1929,8 +1929,9 @@ async function crearLeadSantiago(req, res, fuente, getIdx, setIdx) {
   try {
     const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
     if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
-    const vendedores = await getVendedoresDeEquipo(FAVIER_ID);
-    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Martin Favier' });
+    // Todos los vendedores del árbol de Santiago De Torres (sin importar el supervisor)
+    const vendedores = await getVendedoresDeEquipo(SANTIAGO_DE_TORRES_ID);
+    if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el árbol de Santiago De Torres' });
     const idx = getIdx() % vendedores.length;
     const vendedor = vendedores[idx];
     setIdx((idx + 1) % vendedores.length);
@@ -1989,6 +1990,19 @@ router.post('/sheets-fastleads-general', async (req, res) => {
 router.post('/sheets-gle-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-gle-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
   await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
+});
+
+// Fast Leads → Santiago De Torres (equipo Martin Favier 116) — Peugeot
+router.post('/sheets-fastleads-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'Fast Leads', () => santiagoFastIdx, v => { santiagoFastIdx = v; });
+});
+
+// Link Media → Santiago De Torres (equipo Martin Favier 116) — Peugeot
+let santiagoLinkIdx = 0;
+router.post('/sheets-linkmedia-santiago', async (req, res) => {
+  if (req.headers['x-sheet-key'] !== 'goldplan-linkmedia-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
+  await crearLeadSantiago(req, res, 'Link Media', () => santiagoLinkIdx, v => { santiagoLinkIdx = v; });
 });
 
 // ========= Bot: actualización progresiva de leads (espejo de ALRA) =========
