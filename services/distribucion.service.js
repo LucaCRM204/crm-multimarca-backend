@@ -22,6 +22,11 @@ const pool = require('../db');
 const TOTAL = 100;
 const ROL_VENDEDOR = 'vendedor';
 
+// Cuántos niveles baja la cascada como máximo (gerente → supervisor →
+// vendedor son 2, el resto es margen). También corta cualquier ciclo
+// si la jerarquía quedara mal cargada.
+const PROFUNDIDAD_MAX = 6;
+
 const scopeDe = (equipoId) => `lider:${equipoId}`;
 
 // IDs que nunca deben recibir leads: contenedores de proveedores y
