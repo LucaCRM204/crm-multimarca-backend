@@ -231,11 +231,22 @@ router.put('/', authenticateToken, soloAdmins, async (req, res) => {
 
 router.get('/:equipoId/detalle', authenticateToken, soloAdmins, guardEquipo, async (req, res) => {
   try {
+    const cfg = await dist.getConfigEquipo(req.equipoId);
     const vendedores = await dist.listar(req.equipoId);
     const total = vendedores.filter((v) => !v.pausado).reduce((s, v) => s + v.peso, 0);
+
+    // En cascada los miembros son supervisores, no vendedores.
+    // El panel usa esto para mostrar el boton "ver equipo".
+    const tipo = vendedores.some((v) => v.role && v.role !== 'vendedor')
+      ? 'equipos'
+      : 'vendedores';
+
     res.json({
       ok: true,
       equipoId: req.equipoId,
+      gestionado: !!cfg,
+      modo: cfg ? cfg.modo : null,
+      tipo,
       total: Math.round(total * 100) / 100,
       vendedores,
     });
@@ -308,6 +319,28 @@ router.post('/:equipoId/sincronizar', authenticateToken, soloAdmins, guardEquipo
   } catch (err) {
     console.error('[distribution] sincronizar:', err.message);
     res.status(500).json({ ok: false, error: 'Error al sincronizar el equipo' });
+  }
+});
+
+// GET /api/distribution/gestionados — equipos que usan porcentajes.
+// Va antes de /:supervisorId para que no se lo coma.
+router.get('/gestionados', authenticateToken, soloAdmins, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT e.lider_id, e.modo, e.nota, u.name, u.role, u.reportsTo
+         FROM distribucion_equipos e
+         JOIN users u ON u.id = e.lider_id
+        WHERE e.activo = 1
+        ORDER BY FIELD(e.modo,'cascada','plano'), u.name`
+    );
+
+    const permitidos = await Promise.all(
+      rows.map((r) => puedeAdministrar(req.user, r.lider_id))
+    );
+    res.json({ ok: true, equipos: rows.filter((_, i) => permitidos[i]) });
+  } catch (err) {
+    console.error('[distribution] gestionados:', err.message);
+    res.status(500).json({ ok: false, error: 'Error al obtener los equipos' });
   }
 });
 

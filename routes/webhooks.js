@@ -174,28 +174,33 @@ let santiagoEmanuelIdx = 0, santiagoFastIdx = 0, santiagoGleIdx = 0, fastleadsGe
 // Round-robin por equipo
 let roundRobinIndex = {};
 
-// ⬇️ MODIFICADO: ahora reparte por porcentaje en vez de rotacion pareja.
-// Misma firma y mismo valor de retorno, asi los lugares que la llaman
-// no cambian. Si la distribucion falla, cae sola al metodo viejo.
+// ⬇️ MODIFICADO: reparte por porcentaje SOLO si el equipo esta
+// registrado en la tabla distribucion_equipos. Cualquier otro equipo
+// sigue con la rotacion de siempre, sin tocarse.
 async function assignVendorInTeam(equipoId, leadId = null, fuente = null) {
   try {
-    const vendedorId = await dist.siguienteVendedor(equipoId, leadId, fuente);
+    const r = await dist.siguienteVendedor(equipoId, leadId, fuente);
 
-    if (!vendedorId) {
+    if (!r.gestionado) {
+      // Equipo no registrado: rotacion pareja de toda la vida.
+      return assignVendorInTeamLegacy(equipoId);
+    }
+
+    if (!r.userId) {
       console.error('❌ No hay vendedores disponibles en el equipo:', equipoId);
       return null;
     }
 
-    console.log(`🎯 Equipo ${equipoId}: asignado a vendedor ${vendedorId} (por %)`);
-    return vendedorId;
+    console.log(`🎯 Equipo ${equipoId}: asignado a vendedor ${r.userId} (por %)`);
+    return r.userId;
   } catch (e) {
     console.error('⚠️ Distribucion fallo, uso rotacion vieja:', e.message);
     return assignVendorInTeamLegacy(equipoId);
   }
 }
 
-// Red de emergencia: es el codigo que tenias antes, sin tocar.
-// Cuando lleves un mes sin ver el warning de arriba, borrala.
+// Rotacion pareja original, sin cambios. Se usa para todos los equipos
+// que no esten en distribucion_equipos, y como red de emergencia.
 async function assignVendorInTeamLegacy(equipoId) {
   const vendedores = await getVendedoresDeEquipo(equipoId);
 
