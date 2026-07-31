@@ -161,32 +161,50 @@ const io = initSocketServer(server, pool);
 app.set('io', io);
 
 // ============================================
-// CRON: mantenimiento de la distribucion de leads
-// Requiere: npm i node-cron
+// TAREAS PROGRAMADAS: distribucion de leads
+// Sin dependencias externas, usa setInterval nativo.
 // ============================================
-const cron = require('node-cron');
 const dist = require('./services/distribucion.service');
 
+const MIN = 60 * 1000;
+
 // Cada 15 min: realinea los equipos por si algun cambio de jerarquia
-// se escapo (deploy a mitad de camino, edicion directa en la base, etc).
-cron.schedule('*/15 * * * *', async () => {
+// se escapo (edicion directa en la base, deploy a mitad de camino, etc).
+setInterval(async () => {
   try {
     const n = await dist.sincronizarTodos();
-    if (n) console.log(`⚖️  Distribucion: ${n} equipos realineados`);
+    if (n) console.log(`\u2696\ufe0f  Distribucion: ${n} equipos realineados`);
   } catch (e) {
-    console.error('[cron] distribucion:', e.message);
+    console.error('[tarea] distribucion:', e.message);
   }
-});
+}, 15 * MIN);
 
-// El 1° de cada mes a las 00:00: resetea el contador "recibidos este mes".
-cron.schedule('0 0 1 * *', async () => {
+// Reset del contador "recibidos este mes".
+// Se chequea cada hora; corre el dia 1 en horario de Argentina (UTC-3).
+// Es idempotente: resetear dos veces a cero no hace nada malo.
+let ultimoResetMes = null;
+setInterval(async () => {
+  const arg = new Date(Date.now() - 3 * 60 * 60 * 1000); // UTC-3
+  const clave = `${arg.getUTCFullYear()}-${arg.getUTCMonth()}`;
+
+  if (arg.getUTCDate() !== 1 || ultimoResetMes === clave) return;
+
+  ultimoResetMes = clave;
   try {
     await dist.resetMensual();
-    console.log('⚖️  Distribucion: contadores mensuales reseteados');
+    console.log('\u2696\ufe0f  Distribucion: contadores mensuales reseteados');
   } catch (e) {
-    console.error('[cron] reset mensual:', e.message);
+    console.error('[tarea] reset mensual:', e.message);
+    ultimoResetMes = null; // que reintente en la proxima hora
   }
-});
+}, 60 * MIN);
+
+// Primer realineado 30s despues de arrancar, ya con todo levantado.
+setTimeout(() => {
+  dist.sincronizarTodos()
+    .then((n) => n && console.log(`\u2696\ufe0f  Distribucion: ${n} equipos realineados al inicio`))
+    .catch((e) => console.error('[tarea] sync inicial:', e.message));
+}, 30 * 1000);
 
 const PORT = process.env.PORT || 3001;
 
