@@ -1764,11 +1764,19 @@ crearEndpointGoldplanPool({ ruta: '/goldplan-pool-osvaldo',      sheetKey: 'gold
 crearEndpointGoldplanPool({ ruta: '/goldplan-pool-fastleads',    sheetKey: 'goldplan-pool-fastleads-2026',    fuente: 'Fast Leads' });
 
 // ============================================================
-// EMANUEL → equipo David (gerente 457) - EXCLUSIVO
-// Reemplaza al pool 9:5:5 para esta fuente. Misma URL y key,
-// así el Apps Script de la planilla no cambia.
+// EMANUEL → equipo JOSE LUIS SUP (597, reporta a Trench 507) - EXCLUSIVO
+// Antes iba en round-robin al equipo David (457).
+// Ahora:
+//  - Round-robin entre los vendedores activos que cuelgan de JOSE LUIS SUP
+//    (hoy solo JOSE VENDEDOR2, 603). Si suman vendedores, entran solos.
+//  - Si el SUP se queda sin vendedores activos, el lead va directo a él (597).
+//  - Si el SUP tampoco está activo responde 500: el Apps Script solo borra
+//    filas con 200, así que el lead queda en la planilla y se reintenta.
+// Misma URL y key, así el Apps Script de la planilla no cambia.
 // ============================================================
-let emanuelDavidIndex = 0;
+const JOSE_LUIS_SUP_ID = 597;
+let emanuelJLSupIndex = 0;
+
 router.post('/goldplan-pool-emanuel', async (req, res) => {
   try {
     const key = req.headers['x-sheet-key'];
@@ -1777,19 +1785,32 @@ router.post('/goldplan-pool-emanuel', async (req, res) => {
     }
 
     const { nombre, telefono, modelo, marca, localidad, notas, correo } = req.body;
-    console.log('[Emanuel-David] Recibido:', JSON.stringify(req.body));
+    console.log('[Emanuel-JLSup] Recibido:', JSON.stringify(req.body));
 
     if (!nombre || !telefono) {
       return res.status(400).json({ error: 'Nombre y telefono son requeridos', received: { nombre, telefono } });
     }
 
-    const vendedores = await getVendedoresDeEquipo(457);
-    if (!vendedores || vendedores.length === 0) {
-      return res.status(500).json({ error: 'No hay vendedores activos en equipo David (457)' });
+    let destino = null;
+    const vendedores = await getVendedoresDeEquipo(JOSE_LUIS_SUP_ID);
+
+    if (vendedores.length > 0) {
+      destino = vendedores[emanuelJLSupIndex % vendedores.length];
+      emanuelJLSupIndex = (emanuelJLSupIndex + 1) % vendedores.length;
+    } else {
+      const [supRows] = await pool.execute(
+        'SELECT id, name FROM users WHERE id = ? AND active = 1',
+        [JOSE_LUIS_SUP_ID]
+      );
+      destino = supRows[0] || null;
     }
-    const vendedor = vendedores[emanuelDavidIndex % vendedores.length];
-    emanuelDavidIndex = (emanuelDavidIndex + 1) % vendedores.length;
-    const assigned_to = vendedor.id;
+
+    if (!destino) {
+      console.error(`[Emanuel-JLSup] JOSE LUIS SUP (${JOSE_LUIS_SUP_ID}) inactivo y sin vendedores activos`);
+      return res.status(500).json({ error: `JOSE LUIS SUP (${JOSE_LUIS_SUP_ID}) inactivo y sin vendedores activos` });
+    }
+
+    const assigned_to = destino.id;
 
     const notasArr = [];
     if (localidad) notasArr.push('Localidad: ' + localidad);
@@ -1807,22 +1828,24 @@ router.post('/goldplan-pool-emanuel', async (req, res) => {
       [nombre || '', telefono || '', modelo || 'Consultar', marcaFinal, notasFinal, assigned_to]
     );
 
-    console.log(`[Emanuel-David] Lead #${ins.insertId} -> David: ${vendedor.name} (${assigned_to})`);
+    const modo = vendedores.length > 0 ? `pool: ${vendedores.length}` : 'SUP directo';
+    console.log(`[Emanuel-JLSup] Lead #${ins.insertId} -> ${destino.name} (${assigned_to}) | ${modo}`);
 
     res.json({
       ok: true,
       leadId: ins.insertId,
-      vendedor: vendedor.name,
+      vendedor: destino.name,
       assignedTo: assigned_to,
-      equipo: 'David',
-      fuente: 'Emanuel'
+      equipo: 'Jose Luis SUP',
+      fuente: 'Emanuel',
+      pool: vendedores.length
     });
   } catch (error) {
-    console.error('[Emanuel-David] Error:', error);
+    console.error('[Emanuel-JLSup] Error:', error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
-// [MOVIDO] Emanuel salió del pool 9:5:5 → ahora va exclusivo al gerente David (457), ver ruta dedicada abajo
+// [MOVIDO] Emanuel salió del pool 9:5:5 (después pasó por equipo David 457) → ahora va exclusivo al equipo de JOSE LUIS SUP (597), ver ruta dedicada arriba
 // crearEndpointGoldplanPool({ ruta: '/goldplan-pool-emanuel',      sheetKey: 'goldplan-pool-emanuel-2026',      fuente: 'Emanuel' });
 
 
