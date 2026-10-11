@@ -83,12 +83,18 @@ function cleanText(v) {
   return stripLabel(v);
 }
 
+// Marcas aceptadas en leads (incluye chinas: Chery, BAIC, ARCFOX)
+const MARCAS_VALIDAS = ['vw', 'fiat', 'peugeot', 'renault', 'chery', 'baic', 'arcfox'];
+
 function detectMarca(text) {
   const t = (text || '').toLowerCase();
   if (/volkswagen|vw/.test(t)) return 'vw';
   if (/fiat/.test(t)) return 'fiat';
   if (/peugeot/.test(t)) return 'peugeot';
   if (/renault/.test(t)) return 'renault';
+  if (/chery|tiggo|arrizo|himla/.test(t)) return 'chery';
+  if (/arcfox|kaola/.test(t)) return 'arcfox';
+  if (/baic|\bbj ?(30|40|60)\b|\bx ?(35|55)\b|\beu ?5\b|\bu5\b/.test(t)) return 'baic';
   return null;
 }
 
@@ -246,8 +252,7 @@ router.post('/lacomer', async (req, res) => {
       });
     }
 
-    const validMarcas = ['vw', 'fiat', 'peugeot', 'renault'];
-    if (!validMarcas.includes(marca)) {
+    if (!MARCAS_VALIDAS.includes(marca)) {
       console.log(`⚠️ Marca "${marca}" no válida, usando VW por default`);
       marca = 'vw';
     }
@@ -2067,7 +2072,7 @@ router.post('/bot-lead-update', async (req, res) => {
     const vals = [];
     if (nombre !== undefined && nombre !== null) { sets.push('nombre = ?'); vals.push(String(nombre)); }
     if (modelo !== undefined && modelo !== null) { sets.push('modelo = ?'); vals.push(String(modelo)); }
-    if (marca && ['vw', 'fiat', 'peugeot', 'renault'].includes(String(marca).toLowerCase())) {
+    if (marca && MARCAS_VALIDAS.includes(String(marca).toLowerCase())) {
       sets.push('marca = ?'); vals.push(String(marca).toLowerCase());
     }
     if (notas !== undefined && notas !== null) { sets.push('notas = ?'); vals.push(String(notas)); }
