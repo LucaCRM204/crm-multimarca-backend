@@ -132,6 +132,7 @@ async function getVendedoresDeEquipo(equipoId) {
       INNER JOIN tree t ON u.id = t.id
       WHERE u.active = 1
         AND u.role = 'vendedor'
+        AND u.recibe_leads = 1
       ORDER BY u.id
     `, [equipoId]);
 
@@ -158,13 +159,33 @@ async function getVendedoresDeEquipos(equipoIds) {
       )
       SELECT DISTINCT u.id, u.name
       FROM users u INNER JOIN tree t ON u.id = t.id
-      WHERE u.active = 1 AND u.role = 'vendedor'
+      WHERE u.active = 1 AND u.role = 'vendedor' AND u.recibe_leads = 1
       ORDER BY u.id
     `, equipoIds);
     return vendedores;
   } catch (e) {
     console.error('❌ getVendedoresDeEquipos:', e.message);
     return [];
+  }
+}
+
+// Filtra una lista FIJA de vendedores dejando solo los activos que reciben leads.
+// Si no queda ninguno, devuelve la lista original para no perder el lead.
+async function disponiblesDeLista(lista) {
+  try {
+    const ids = lista.map(v => v.id);
+    if (!ids.length) return lista;
+    const ph = ids.map(() => '?').join(',');
+    const [rows] = await pool.execute(
+      `SELECT id FROM users WHERE id IN (${ph}) AND active = 1 AND recibe_leads = 1`, ids
+    );
+    const ok = new Set(rows.map(r => r.id));
+    const filtrada = lista.filter(v => ok.has(v.id));
+    if (!filtrada.length) console.warn('⚠️ Lista fija sin vendedores disponibles, uso la original');
+    return filtrada.length ? filtrada : lista;
+  } catch (e) {
+    console.error('disponiblesDeLista:', e.message);
+    return lista;
   }
 }
 
@@ -264,9 +285,19 @@ router.post('/lacomer', async (req, res) => {
       assigned_to = 266; // Vendedor Ruleta
       console.log('🎰 Lead de Ruleta Digital: Asignado directamente a vendedor Ruleta (ID: 266)');
     } else if (body.assigned_to) {
-      // El número por donde entró pertenece a un vendedor → lead directo a él
-      assigned_to = parseInt(body.assigned_to);
-      console.log(`🎯 Lead asignado DIRECTO a vendedor ${assigned_to} (dueño del número WhatsApp)`);
+      // El número por donde entró pertenece a un vendedor → lead directo a él,
+      // salvo que esté pausado (recibe_leads = 0) o inactivo: ahí reparte en su equipo.
+      const directo = parseInt(body.assigned_to);
+      const [du] = await pool.execute('SELECT id, reportsTo, active, recibe_leads FROM users WHERE id = ?', [directo]);
+      if (du[0] && Number(du[0].active) === 1 && Number(du[0].recibe_leads) === 1) {
+        assigned_to = directo;
+        console.log(`🎯 Lead asignado DIRECTO a vendedor ${assigned_to} (dueño del número WhatsApp)`);
+      } else {
+        const equipoFallback = du[0]?.reportsTo || equipoId || null;
+        console.log(`⏸️ Vendedor ${directo} pausado/inactivo → reparto en equipo ${equipoFallback}`);
+        assigned_to = equipoFallback ? await assignVendorInTeam(equipoFallback) : null;
+        if (!assigned_to) assigned_to = directo; // red de seguridad: no perder el lead
+      }
     } else if (equipoId) {
       console.log(`👥 Asignando lead al equipo ID: ${equipoId}`);
       
@@ -347,8 +378,9 @@ router.post('/sheets-ares', async (req, res) => {
       });
     }
 
-    const vendedor = VENDEDORES_ARES_SHEETS[aresSheetsIndex];
-    aresSheetsIndex = (aresSheetsIndex + 1) % VENDEDORES_ARES_SHEETS.length;
+    const listaAres = await disponiblesDeLista(VENDEDORES_ARES_SHEETS);
+    const vendedor = listaAres[aresSheetsIndex % listaAres.length];
+    aresSheetsIndex = (aresSheetsIndex + 1) % listaAres.length;
 
     const assigned_to = vendedor.id;
 
@@ -404,8 +436,9 @@ router.post('/sheets-favier', async (req, res) => {
       });
     }
 
-    const vendedor = VENDEDORES_FAVIER_SHEETS[favierSheetsIndex];
-    favierSheetsIndex = (favierSheetsIndex + 1) % VENDEDORES_FAVIER_SHEETS.length;
+    const listaFavier = await disponiblesDeLista(VENDEDORES_FAVIER_SHEETS);
+    const vendedor = listaFavier[favierSheetsIndex % listaFavier.length];
+    favierSheetsIndex = (favierSheetsIndex + 1) % listaFavier.length;
 
     const assigned_to = vendedor.id;
 
@@ -1283,8 +1316,9 @@ router.post('/pagina-goldplan', async (req, res) => {
     const marca = detectMarca(modelo) || 'vw';
 
     // Round-robin con vendedores Favier
-    const vendedor = VENDEDORES_FAVIER_SHEETS[paginaGoldplanIndex];
-    paginaGoldplanIndex = (paginaGoldplanIndex + 1) % VENDEDORES_FAVIER_SHEETS.length;
+    const listaPagina = await disponiblesDeLista(VENDEDORES_FAVIER_SHEETS);
+    const vendedor = listaPagina[paginaGoldplanIndex % listaPagina.length];
+    paginaGoldplanIndex = (paginaGoldplanIndex + 1) % listaPagina.length;
 
     const assigned_to = vendedor.id;
 
