@@ -144,6 +144,7 @@ app.use('/api/metas', metasRouter(pool)); // ← NUEVO: Rutas de metas
 app.use('/api/whatsapp', whatsappRouter(pool)); // ← WhatsApp Chat
 app.use('/api/distribution', require('./routes/distribution')); // ← Distribución de leads
 app.use('/api/calls', require('./routes/calls')); // ← Registro de llamadas
+app.use('/api/owner/marcas-vendedores', require('./routes/ownerMarcas')); // ← Marcas por vendedor (solo owner)
 if (usersRouter) app.use('/api/users', usersRouter);
 
 // Health check
@@ -153,7 +154,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOS
 app.get('/', (_req, res) => res.json({ 
   message: 'Alluma CRM Backend API', 
   version: '2.2.0',
-  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring', 'metas', 'whatsapp-chat']
+  features: ['realtime', 'presence', 'activity-tracking', 'auto-reassignment', 'scoring', 'metas', 'whatsapp-chat', 'marcas-por-vendedor']
 }));
 
 // Inicializar WebSockets
