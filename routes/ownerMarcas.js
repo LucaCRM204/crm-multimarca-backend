@@ -47,31 +47,49 @@ async function requireOwner(req, res, next) {
 
 router.use(requireOwner);
 
-// GET -> marcas disponibles + vendedores con su config
+// Sube por reportsTo y devuelve el primer ancestro con ese rol
+function buscarAncestro(user, rol, porId) {
+  const vistos = new Set();
+  let actual = user.reportsTo ? porId.get(Number(user.reportsTo)) : null;
+  while (actual && !vistos.has(actual.id)) {
+    vistos.add(actual.id);
+    if (String(actual.role).toLowerCase() === rol) return { id: actual.id, nombre: actual.name };
+    actual = actual.reportsTo ? porId.get(Number(actual.reportsTo)) : null;
+  }
+  return null;
+}
+
+// GET -> marcas disponibles + vendedores con su gerencia/supervisor y config
 router.get('/', async (req, res) => {
   try {
-    const [vendedores] = await pool.query(
-      `SELECT u.id, u.name AS nombre, u.role AS rol, u.active AS activo,
-              u.recibe_leads, l.name AS equipo
-         FROM users u
-         LEFT JOIN users l ON l.id = u.reportsTo
-        WHERE LOWER(u.role) IN (?)
-        ORDER BY u.active DESC, l.name ASC, u.name ASC`,
-      [ROLES_VENDEDOR]
+    const [usuarios] = await pool.query(
+      'SELECT id, name, role, reportsTo, active, recibe_leads FROM users'
     );
+    const porId = new Map(usuarios.map(u => [Number(u.id), u]));
+
+    const vendedores = usuarios
+      .filter(u => ROLES_VENDEDOR.includes(String(u.role).toLowerCase()))
+      .map(u => ({ u, gerente: buscarAncestro(u, 'gerente', porId), supervisor: buscarAncestro(u, 'supervisor', porId) }))
+      .sort((a, b) =>
+        Number(b.u.active) - Number(a.u.active) ||
+        (a.gerente?.nombre || '~').localeCompare(b.gerente?.nombre || '~') ||
+        (a.supervisor?.nombre || '~').localeCompare(b.supervisor?.nombre || '~') ||
+        String(a.u.name).localeCompare(String(b.u.name))
+      );
 
     const config = await getConfigMarcas();
 
     res.json({
       marcas: MARCAS,
-      vendedores: vendedores.map(v => ({
-        id: v.id,
-        nombre: v.nombre,
-        rol: v.rol,
-        equipo: v.equipo || null,
-        activo: !!Number(v.activo),
-        recibeLeads: !!Number(v.recibe_leads),
-        marcas: config.has(Number(v.id)) ? config.get(Number(v.id)) : null, // null = todas
+      vendedores: vendedores.map(({ u, gerente, supervisor }) => ({
+        id: u.id,
+        nombre: u.name,
+        rol: u.role,
+        gerente,     // { id, nombre } | null
+        supervisor,  // { id, nombre } | null
+        activo: !!Number(u.active),
+        recibeLeads: !!Number(u.recibe_leads),
+        marcas: config.has(Number(u.id)) ? config.get(Number(u.id)) : null, // null = todas
       })),
     });
   } catch (err) {
