@@ -2,22 +2,8 @@
 const pool = require('../db');
 const { getAssignedVendorByBrand } = require('../utils/assign');
 const dist = require('../services/distribucion.service'); // distribucion ponderada
+const { normalizarMarca, filtrarVendedoresPorMarca } = require('../services/marcasVendedor');
 const router = express.Router();
-
-// ========= Índices Round Robin para Sheets =========
-let aresSheetsIndex = 0;
-let brianSheetsIndex = 0;
-let sebastianSheetsIndex = 0;
-let lucianoSheetsIndex = 0;
-let brianDPSheetsIndex = 0;
-let sebastianDPSheetsIndex = 0;
-let lucianoDPSheetsIndex = 0;
-let favierSheetsIndex = 0; // NUEVO: índice para Favier
-let paginaGoldplanIndex = 0; // índice para leads de la página web
-let herreraSheetsIndex = 0; // NUEVO: índice para equipo Carlos Herrera
-let caseresSheetsIndex = 0; // NUEVO: índice para equipo Martin Caseres
-let delvalleNigroIndex = 0; // NUEVO: índice para webhook fastleads-nigro redirigido a equipo Delvalle
-let emanuelGeneralIndex = 0; // NUEVO: índice para Emanuel General (todos los vendedores activos)
 
 // IDs a excluir del round-robin de Emanuel General (contenedores + datos viejos)
 const VENDEDORES_EXCLUIDOS_EMANUEL = [
@@ -189,28 +175,111 @@ async function disponiblesDeLista(lista) {
   }
 }
 
+// =====================================================================
+// RUEDA CON FILTRO DE MARCA (sección "Marcas por vendedor" del owner)
+// =====================================================================
+// Cada rueda guarda el ID del último vendedor asignado (no un índice), así
+// al filtrar por marca no se desordena aunque la lista cambie de largo.
+const ruedaUltimo = {}; // key -> id del último vendedor asignado
+
+// Marca real del lead para filtrar: la que viene en el body o la que se
+// detecta en el modelo. Si no se puede determinar devuelve null y la rueda
+// reparte sin filtro (NO usa los defaults 'fiat'/'vw' de los INSERT).
+function marcaDelLead(marcaRaw, modelo) {
+  return normalizarMarca(marcaRaw) || normalizarMarca(detectMarca(modelo));
+}
+
+/**
+ * Elige el próximo vendedor de la rueda `key` que reciba `marca`.
+ * - vendedores: lista completa de la rueda ({ id, name }), en orden estable.
+ * - marca: categoría normalizada o null (sin filtro).
+ * - opts.fallbackId: si nadie de la rueda recibe esa marca, el lead va a este
+ *   usuario (el líder del equipo). Sin fallbackId reparte ignorando la marca.
+ * Devuelve { id, name, porFallback? } o null si la lista está vacía.
+ */
+async function siguienteEnRueda(key, vendedores, marca = null, opts = {}) {
+  if (!vendedores || !vendedores.length) return null;
+
+  let candidatos = vendedores;
+  if (marca) {
+    try {
+      candidatos = await filtrarVendedoresPorMarca(vendedores, marca);
+    } catch (e) {
+      console.error(`[Rueda ${key}] Error filtrando por marca, reparto sin filtro:`, e.message);
+      candidatos = vendedores;
+    }
+  }
+
+  if (!candidatos.length) {
+    if (opts.fallbackId) {
+      const [rows] = await pool.execute(
+        'SELECT id, name FROM users WHERE id = ? AND active = 1',
+        [opts.fallbackId]
+      );
+      if (rows[0]) {
+        console.log(`🏷️ [Rueda ${key}] Nadie recibe "${marca}" → queda en el líder ${rows[0].name} (${rows[0].id})`);
+        return { ...rows[0], porFallback: true };
+      }
+    }
+    console.warn(`⚠️ [Rueda ${key}] Nadie recibe "${marca}" y no hay líder activo → reparto sin filtro de marca`);
+    candidatos = vendedores;
+  }
+
+  const ok = new Set(candidatos.map(v => Number(v.id)));
+  const n = vendedores.length;
+  const ultimo = ruedaUltimo[key];
+
+  let pos = -1;
+  if (ultimo != null) {
+    pos = vendedores.findIndex(v => Number(v.id) === Number(ultimo));
+    if (pos === -1) {
+      // El último ya no está en la lista: arranca desde el siguiente ID mayor
+      const sig = vendedores.findIndex(v => Number(v.id) > Number(ultimo));
+      pos = sig === -1 ? -1 : sig - 1;
+    }
+  }
+
+  for (let i = 1; i <= n; i++) {
+    const v = vendedores[(pos + i) % n];
+    if (ok.has(Number(v.id))) {
+      ruedaUltimo[key] = v.id;
+      if (marca) console.log(`🏷️ [Rueda ${key}] Marca "${marca}": ${candidatos.length}/${n} habilitados → ${v.name} (${v.id})`);
+      return v;
+    }
+  }
+  return null;
+}
+
+// true si el vendedor puede recibir esa marca (sin marca => true)
+async function aceptaMarca(userId, marca) {
+  if (!marca || !userId) return true;
+  try {
+    const r = await filtrarVendedoresPorMarca([{ id: Number(userId) }], marca);
+    return r.length > 0;
+  } catch (e) {
+    console.error('aceptaMarca:', e.message);
+    return true;
+  }
+}
+
 // IDs de gerentes GoldPlan (mes actual)
 const CASERES_ID = 357;
 const ORGE_ID = 419;
 const SANTIAGO_DE_TORRES_ID = 424;
 // Santiago tiene 2 supervisiones: los leads de planillas van SOLO al equipo de Martin Favier
 const FAVIER_ID = 116;
-// índices round-robin para los webhooks de Santiago de Torres
-let santiagoEmanuelIdx = 0, santiagoFastIdx = 0, santiagoGleIdx = 0, fastleadsGeneralIdx = 0;
-
-// Round-robin por equipo
-let roundRobinIndex = {};
 
 // ⬇️ MODIFICADO: reparte por porcentaje SOLO si el equipo esta
 // registrado en la tabla distribucion_equipos. Cualquier otro equipo
 // sigue con la rotacion de siempre, sin tocarse.
-async function assignVendorInTeam(equipoId, leadId = null, fuente = null) {
+// + marca: si el elegido por % no recibe esa marca, rota entre los que sí.
+async function assignVendorInTeam(equipoId, leadId = null, fuente = null, marca = null) {
   try {
     const r = await dist.siguienteVendedor(equipoId, leadId, fuente);
 
     if (!r.gestionado) {
       // Equipo no registrado: rotacion pareja de toda la vida.
-      return assignVendorInTeamLegacy(equipoId);
+      return assignVendorInTeamLegacy(equipoId, marca);
     }
 
     if (!r.userId) {
@@ -218,17 +287,22 @@ async function assignVendorInTeam(equipoId, leadId = null, fuente = null) {
       return null;
     }
 
+    if (!(await aceptaMarca(r.userId, marca))) {
+      console.log(`🏷️ Equipo ${equipoId}: vendedor ${r.userId} (por %) no recibe "${marca}" → rueda filtrada`);
+      return assignVendorInTeamLegacy(equipoId, marca);
+    }
+
     console.log(`🎯 Equipo ${equipoId}: asignado a vendedor ${r.userId} (por %)`);
     return r.userId;
   } catch (e) {
     console.error('⚠️ Distribucion fallo, uso rotacion vieja:', e.message);
-    return assignVendorInTeamLegacy(equipoId);
+    return assignVendorInTeamLegacy(equipoId, marca);
   }
 }
 
-// Rotacion pareja original, sin cambios. Se usa para todos los equipos
-// que no esten en distribucion_equipos, y como red de emergencia.
-async function assignVendorInTeamLegacy(equipoId) {
+// Rotacion pareja original (ahora con filtro de marca). Se usa para todos
+// los equipos que no esten en distribucion_equipos, y como red de emergencia.
+async function assignVendorInTeamLegacy(equipoId, marca = null) {
   const vendedores = await getVendedoresDeEquipo(equipoId);
 
   if (vendedores.length === 0) {
@@ -236,16 +310,10 @@ async function assignVendorInTeamLegacy(equipoId) {
     return null;
   }
 
-  if (roundRobinIndex[equipoId] === undefined) {
-    roundRobinIndex[equipoId] = 0;
-  }
-
-  const vendedor = vendedores[roundRobinIndex[equipoId]];
-  roundRobinIndex[equipoId] = (roundRobinIndex[equipoId] + 1) % vendedores.length;
+  const vendedor = await siguienteEnRueda(`equipo:${equipoId}`, vendedores, marca, { fallbackId: equipoId });
+  if (!vendedor) return null;
 
   console.log(`🎯 Equipo ${equipoId}: Asignado a ${vendedor.name} (ID: ${vendedor.id})`);
-  console.log(`   Próximo índice: ${roundRobinIndex[equipoId]}/${vendedores.length}`);
-
   return vendedor.id;
 }
 
@@ -265,6 +333,7 @@ router.post('/lacomer', async (req, res) => {
     const fuente  = cleanText(body.fuente) || 'lacomer';
     
     const equipoId = body.equipoId || body.teamId || body.equipo_id;
+    const marcaFiltro = marcaDelLead(body.marca, body.modelo);
     
     if (!nombre || !telefono) {
       return res.status(400).json({ 
@@ -295,13 +364,13 @@ router.post('/lacomer', async (req, res) => {
       } else {
         const equipoFallback = du[0]?.reportsTo || equipoId || null;
         console.log(`⏸️ Vendedor ${directo} pausado/inactivo → reparto en equipo ${equipoFallback}`);
-        assigned_to = equipoFallback ? await assignVendorInTeam(equipoFallback) : null;
+        assigned_to = equipoFallback ? await assignVendorInTeam(equipoFallback, null, null, marcaFiltro) : null;
         if (!assigned_to) assigned_to = directo; // red de seguridad: no perder el lead
       }
     } else if (equipoId) {
       console.log(`👥 Asignando lead al equipo ID: ${equipoId}`);
       
-      assigned_to = await assignVendorInTeam(equipoId);
+      assigned_to = await assignVendorInTeam(equipoId, null, null, marcaFiltro);
       
       if (!assigned_to) {
         console.error('❌ No se pudo asignar vendedor en el equipo:', equipoId);
@@ -379,8 +448,7 @@ router.post('/sheets-ares', async (req, res) => {
     }
 
     const listaAres = await disponiblesDeLista(VENDEDORES_ARES_SHEETS);
-    const vendedor = listaAres[aresSheetsIndex % listaAres.length];
-    aresSheetsIndex = (aresSheetsIndex + 1) % listaAres.length;
+    const vendedor = await siguienteEnRueda('sheets-ares', listaAres, marcaDelLead(req.body.marca, modelo));
 
     const assigned_to = vendedor.id;
 
@@ -437,8 +505,7 @@ router.post('/sheets-favier', async (req, res) => {
     }
 
     const listaFavier = await disponiblesDeLista(VENDEDORES_FAVIER_SHEETS);
-    const vendedor = listaFavier[favierSheetsIndex % listaFavier.length];
-    favierSheetsIndex = (favierSheetsIndex + 1) % listaFavier.length;
+    const vendedor = await siguienteEnRueda('sheets-favier', listaFavier, marcaDelLead(req.body.marca, modelo), { fallbackId: FAVIER_ID });
 
     const assigned_to = vendedor.id;
 
@@ -501,8 +568,7 @@ router.post('/sheets-brian', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Brian' });
     }
 
-    const vendedor = vendedores[brianSheetsIndex % vendedores.length];
-    brianSheetsIndex = (brianSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-brian', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 221 });
 
     const assigned_to = vendedor.id;
 
@@ -565,8 +631,7 @@ router.post('/sheets-sebastian', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Sebastian' });
     }
 
-    const vendedor = vendedores[sebastianSheetsIndex % vendedores.length];
-    sebastianSheetsIndex = (sebastianSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-sebastian', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 173 });
 
     const assigned_to = vendedor.id;
 
@@ -629,8 +694,7 @@ router.post('/sheets-luciano', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Luciano' });
     }
 
-    const vendedor = vendedores[lucianoSheetsIndex % vendedores.length];
-    lucianoSheetsIndex = (lucianoSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-luciano', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 160 });
 
     const assigned_to = vendedor.id;
 
@@ -693,8 +757,7 @@ router.post('/sheets-brian-dp', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Brian' });
     }
 
-    const vendedor = vendedores[brianDPSheetsIndex % vendedores.length];
-    brianDPSheetsIndex = (brianDPSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-brian-dp', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 221 });
 
     const assigned_to = vendedor.id;
 
@@ -756,8 +819,7 @@ router.post('/sheets-sebastian-dp', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Sebastian' });
     }
 
-    const vendedor = vendedores[sebastianDPSheetsIndex % vendedores.length];
-    sebastianDPSheetsIndex = (sebastianDPSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-sebastian-dp', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 173 });
 
     const assigned_to = vendedor.id;
 
@@ -819,8 +881,7 @@ router.post('/sheets-luciano-dp', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Luciano' });
     }
 
-    const vendedor = vendedores[lucianoDPSheetsIndex % vendedores.length];
-    lucianoDPSheetsIndex = (lucianoDPSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-luciano-dp', vendedores, marcaDelLead(req.body.marca, modelo), { fallbackId: 160 });
 
     const assigned_to = vendedor.id;
 
@@ -878,7 +939,7 @@ router.get('/equipos/status', async (req, res) => {
         rol: lider.role,
         vendedores: vendedores.length,
         vendedoresList: vendedores.map(v => ({ id: v.id, name: v.name })),
-        roundRobinIndex: roundRobinIndex[lider.id] || 0
+        ultimoAsignado: ruedaUltimo[`equipo:${lider.id}`] || null
       });
     }
 
@@ -886,7 +947,7 @@ router.get('/equipos/status', async (req, res) => {
       ok: true,
       equipos,
       totalEquipos: equipos.length,
-      roundRobinState: roundRobinIndex
+      ruedas: ruedaUltimo
     });
 
   } catch (error) {
@@ -1040,8 +1101,8 @@ router.post('/fastleads-nigro', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Victor Delvalle' });
     }
 
-    const vendedor = vendedores[delvalleNigroIndex % vendedores.length];
-    delvalleNigroIndex = (delvalleNigroIndex + 1) % vendedores.length;
+    // Este webhook es siempre VW (se inserta marca 'vw')
+    const vendedor = await siguienteEnRueda('fastleads-nigro', vendedores, marcaDelLead(req.body.marca, modelo) || 'vw', { fallbackId: VICTOR_DELVALLE_ID });
     const assigned_to = vendedor.id;
 
     const [result] = await pool.execute(
@@ -1317,8 +1378,7 @@ router.post('/pagina-goldplan', async (req, res) => {
 
     // Round-robin con vendedores Favier
     const listaPagina = await disponiblesDeLista(VENDEDORES_FAVIER_SHEETS);
-    const vendedor = listaPagina[paginaGoldplanIndex % listaPagina.length];
-    paginaGoldplanIndex = (paginaGoldplanIndex + 1) % listaPagina.length;
+    const vendedor = await siguienteEnRueda('pagina-goldplan', listaPagina, marcaDelLead(null, modelo), { fallbackId: FAVIER_ID });
 
     const assigned_to = vendedor.id;
 
@@ -1388,8 +1448,7 @@ router.post('/sheets-herrera', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Carlos Herrera' });
     }
 
-    const vendedor = vendedores[herreraSheetsIndex % vendedores.length];
-    herreraSheetsIndex = (herreraSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-herrera', vendedores, marcaDelLead(marca, modelo), { fallbackId: CARLOS_HERRERA_ID });
 
     const assigned_to = vendedor.id;
 
@@ -1544,8 +1603,7 @@ router.post('/sheets-caseres', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Martin Caseres' });
     }
 
-    const vendedor = vendedores[caseresSheetsIndex % vendedores.length];
-    caseresSheetsIndex = (caseresSheetsIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('sheets-caseres', vendedores, marcaDelLead(marca, modelo), { fallbackId: MARTIN_CASERES_ID });
 
     const assigned_to = vendedor.id;
 
@@ -1618,12 +1676,12 @@ router.post('/sheets-emanuel-general', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos disponibles' });
     }
 
-    const vendedor = vendedores[emanuelGeneralIndex % vendedores.length];
-    emanuelGeneralIndex = (emanuelGeneralIndex + 1) % vendedores.length;
+    // Dos equipos: si nadie recibe la marca, reparte sin filtro
+    const vendedor = await siguienteEnRueda('sheets-emanuel-general', vendedores, marcaDelLead(marca, modelo));
 
     const assigned_to = vendedor.id;
 
-    console.log(`📋 Emanuel General → ${vendedor.name} (ID ${assigned_to}). Pool: ${vendedores.length}, próximo idx: ${emanuelGeneralIndex}`);
+    console.log(`📋 Emanuel General → ${vendedor.name} (ID ${assigned_to}). Pool: ${vendedores.length}`);
 
     const notasArr = [];
     if (localidad) notasArr.push('Localidad: ' + localidad);
@@ -1671,21 +1729,8 @@ router.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    sheetsRoundRobin: {
-      ares: aresSheetsIndex,
-      brian: brianSheetsIndex,
-      sebastian: sebastianSheetsIndex,
-      luciano: lucianoSheetsIndex,
-      brianDP: brianDPSheetsIndex,
-      sebastianDP: sebastianDPSheetsIndex,
-      lucianoDP: lucianoDPSheetsIndex,
-      favier: favierSheetsIndex,
-      paginaGoldplan: paginaGoldplanIndex,
-      herrera: herreraSheetsIndex,
-      caseres: caseresSheetsIndex,
-      emanuelGeneral: emanuelGeneralIndex,
-      planesOficiales: planesOficialesCounter
-    },
+    ruedas: ruedaUltimo, // key -> último vendedor asignado
+    planesOficiales: planesOficialesCounter,
     vendedoresFavier: VENDEDORES_FAVIER_SHEETS.map(v => v.name),
     usuariosProveedores: Object.values(USUARIOS_PROVEEDORES).map(u => u.name)
   });
@@ -1708,8 +1753,7 @@ const GOLDPLAN_POOL_PESO_TOTAL = 19; // 9+5+5
 
 // Estado del WRR (current weights) - compartido entre los 4 endpoints
 const goldplanPoolCw = { caseres: 0, favier: 0, delvalle: 0 };
-// Round-robin dentro de cada equipo
-const goldplanPoolRR = { caseres: 0, favier: 0, delvalle: 0 };
+// Round-robin dentro de cada equipo: ruedas 'pool:caseres' / 'pool:favier' / 'pool:delvalle'
 
 function elegirEquipoGoldplanPool() {
   // Smooth WRR (estilo Nginx upstream)
@@ -1725,13 +1769,12 @@ function elegirEquipoGoldplanPool() {
   return max;
 }
 
-async function asignarVendedorGoldplanPool(equipoKey) {
+async function asignarVendedorGoldplanPool(equipoKey, marca = null) {
   const equipo = GOLDPLAN_POOL_GERENTES[equipoKey];
   const vendedores = await getVendedoresDeEquipo(equipo.id);
   if (vendedores.length === 0) return null;
-  const idx = goldplanPoolRR[equipoKey];
-  const vendedor = vendedores[idx % vendedores.length];
-  goldplanPoolRR[equipoKey] = (idx + 1) % vendedores.length;
+  const vendedor = await siguienteEnRueda(`pool:${equipoKey}`, vendedores, marca, { fallbackId: equipo.id });
+  if (!vendedor) return null;
   return { vendedor, equipoLabel: equipo.label };
 }
 
@@ -1753,7 +1796,7 @@ function crearEndpointGoldplanPool(opts) {
       }
 
       const equipoKey = elegirEquipoGoldplanPool();
-      const result = await asignarVendedorGoldplanPool(equipoKey);
+      const result = await asignarVendedorGoldplanPool(equipoKey, marcaDelLead(marca, modelo));
       if (!result) {
         return res.status(500).json({ error: `No hay vendedores activos en equipo ${equipoKey}` });
       }
@@ -1814,7 +1857,6 @@ crearEndpointGoldplanPool({ ruta: '/goldplan-pool-fastleads',    sheetKey: 'gold
 // Misma URL y key, así el Apps Script de la planilla no cambia.
 // ============================================================
 const JOSE_LUIS_SUP_ID = 597;
-let emanuelJLSupIndex = 0;
 
 router.post('/goldplan-pool-emanuel', async (req, res) => {
   try {
@@ -1834,8 +1876,8 @@ router.post('/goldplan-pool-emanuel', async (req, res) => {
     const vendedores = await getVendedoresDeEquipo(JOSE_LUIS_SUP_ID);
 
     if (vendedores.length > 0) {
-      destino = vendedores[emanuelJLSupIndex % vendedores.length];
-      emanuelJLSupIndex = (emanuelJLSupIndex + 1) % vendedores.length;
+      // Si ningún vendedor recibe la marca, queda en el SUP
+      destino = await siguienteEnRueda('emanuel-jlsup', vendedores, marcaDelLead(marca, modelo), { fallbackId: JOSE_LUIS_SUP_ID });
     } else {
       const [supRows] = await pool.execute(
         'SELECT id, name FROM users WHERE id = ? AND active = 1',
@@ -1893,8 +1935,6 @@ router.post('/goldplan-pool-emanuel', async (req, res) => {
 // FERNANDO NIEVA → equipo Martin Caseres (357) - exclusivo
 // Round-robin estricto entre los vendedores de Caseres
 // ============================================================
-let fernandoCaseresIndex = 0;
-
 router.post('/sheets-fernando-caseres', async (req, res) => {
   try {
     const sheetKey = req.headers['x-sheet-key'];
@@ -1918,8 +1958,7 @@ router.post('/sheets-fernando-caseres', async (req, res) => {
       return res.status(500).json({ error: 'No hay vendedores activos en equipo Caseres' });
     }
 
-    const vendedor = vendedores[fernandoCaseresIndex % vendedores.length];
-    fernandoCaseresIndex = (fernandoCaseresIndex + 1) % vendedores.length;
+    const vendedor = await siguienteEnRueda('fernando-caseres', vendedores, marcaDelLead(marca, modelo), { fallbackId: 357 });
     const assigned_to = vendedor.id;
 
     // Armar notas con todos los campos extras
@@ -1963,7 +2002,8 @@ router.post('/sheets-fernando-caseres', async (req, res) => {
 
 // ========= Webhook: Bot WhatsApp GoldPlan — Caseres + Favier =========
 // El bot ya hace el round-robin internamente y manda el assigned_to resuelto.
-// Este endpoint solo inserta el lead tal como llega.
+// Si ese vendedor no recibe la marca del lead, se reasigna dentro de su
+// equipo (reportsTo) con la rueda filtrada por marca.
 // Header requerido: x-sheet-key: goldplan-bot-cf-2026
 router.post('/bot-caseres-favier', async (req, res) => {
   try {
@@ -1982,6 +2022,21 @@ router.post('/bot-caseres-favier', async (req, res) => {
 
     const marcaFinal = (marca || 'vw').toString().toLowerCase();
 
+    let asignadoFinal = parseInt(assigned_to);
+    const marcaFiltro = marcaDelLead(marca, modelo);
+    if (marcaFiltro && !(await aceptaMarca(asignadoFinal, marcaFiltro))) {
+      const [du] = await pool.execute('SELECT reportsTo FROM users WHERE id = ?', [asignadoFinal]);
+      const equipoBot = du[0]?.reportsTo || null;
+      if (equipoBot) {
+        const vendedoresBot = await getVendedoresDeEquipo(equipoBot);
+        const reasignado = await siguienteEnRueda(`bot-cf:${equipoBot}`, vendedoresBot, marcaFiltro, { fallbackId: equipoBot });
+        if (reasignado) {
+          console.log(`🏷️ [Bot CF] ${asignadoFinal} no recibe "${marcaFiltro}" → reasignado a ${reasignado.name} (${reasignado.id})`);
+          asignadoFinal = reasignado.id;
+        }
+      }
+    }
+
     const [result] = await pool.execute(
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
@@ -1993,19 +2048,19 @@ router.post('/bot-caseres-favier', async (req, res) => {
         modelo      || 'Consultar',
         marcaFinal,
         notas       || '',
-        assigned_to,
+        asignadoFinal,
       ]
     );
 
     const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
     const createdLead = leadRows[0] || null;
 
-    console.log(`[Bot CF] Lead #${result.insertId} creado → assigned_to ${assigned_to}`);
+    console.log(`[Bot CF] Lead #${result.insertId} creado → assigned_to ${asignadoFinal}`);
 
     res.json({
       ok:          true,
       lead:        createdLead,
-      assignedTo:  assigned_to,
+      assignedTo:  asignadoFinal,
     });
 
   } catch (error) {
@@ -2015,16 +2070,14 @@ router.post('/bot-caseres-favier', async (req, res) => {
 });
 
 // ========= Santiago De Torres (424) — Emanuel / Fast Leads / GLE =========
-async function crearLeadSantiago(req, res, fuente, getIdx, setIdx) {
+async function crearLeadSantiago(req, res, fuente, ruedaKey) {
   try {
     const { nombre, telefono, modelo, marca, localidad, notas } = req.body;
     if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
     // Todos los vendedores del árbol de Santiago De Torres (sin importar el supervisor)
     const vendedores = await getVendedoresDeEquipo(SANTIAGO_DE_TORRES_ID);
     if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en el árbol de Santiago De Torres' });
-    const idx = getIdx() % vendedores.length;
-    const vendedor = vendedores[idx];
-    setIdx((idx + 1) % vendedores.length);
+    const vendedor = await siguienteEnRueda(ruedaKey, vendedores, marcaDelLead(marca, modelo), { fallbackId: SANTIAGO_DE_TORRES_ID });
     const notasArr = [];
     if (localidad) notasArr.push('Localidad: ' + localidad);
     if (notas)     notasArr.push(notas);
@@ -2046,7 +2099,7 @@ async function crearLeadSantiago(req, res, fuente, getIdx, setIdx) {
 
 router.post('/sheets-emanuel-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-emanuel-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'Emanuel', () => santiagoEmanuelIdx, v => { santiagoEmanuelIdx = v; });
+  await crearLeadSantiago(req, res, 'Emanuel', 'santiago-emanuel');
 });
 
 router.post('/sheets-fastleads-general', async (req, res) => {
@@ -2056,8 +2109,8 @@ router.post('/sheets-fastleads-general', async (req, res) => {
     if (!nombre || !telefono) return res.status(400).json({ error: 'Nombre y telefono son requeridos' });
     const vendedores = await getVendedoresDeEquipos([CASERES_ID, ORGE_ID]);
     if (vendedores.length === 0) return res.status(500).json({ error: 'No hay vendedores activos en Caseres+Orge' });
-    const vendedor = vendedores[fastleadsGeneralIdx % vendedores.length];
-    fastleadsGeneralIdx = (fastleadsGeneralIdx + 1) % vendedores.length;
+    // Dos equipos: si nadie recibe la marca, reparte sin filtro
+    const vendedor = await siguienteEnRueda('fastleads-general', vendedores, marcaDelLead(marca, modelo));
     const notasArr = [];
     if (localidad) notasArr.push('Localidad: ' + localidad);
     if (notas)     notasArr.push(notas);
@@ -2079,20 +2132,19 @@ router.post('/sheets-fastleads-general', async (req, res) => {
 
 router.post('/sheets-gle-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-gle-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'GLE Leads', () => santiagoGleIdx, v => { santiagoGleIdx = v; });
+  await crearLeadSantiago(req, res, 'GLE Leads', 'santiago-gle');
 });
 
 // Fast Leads → Santiago De Torres (equipo Martin Favier 116) — Peugeot
 router.post('/sheets-fastleads-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'Fast Leads', () => santiagoFastIdx, v => { santiagoFastIdx = v; });
+  await crearLeadSantiago(req, res, 'Fast Leads', 'santiago-fastleads');
 });
 
 // Link Media → Santiago De Torres (equipo Martin Favier 116) — Peugeot
-let santiagoLinkIdx = 0;
 router.post('/sheets-linkmedia-santiago', async (req, res) => {
   if (req.headers['x-sheet-key'] !== 'goldplan-linkmedia-santiago-2026') return res.status(401).json({ error: 'No autorizado' });
-  await crearLeadSantiago(req, res, 'Link Media', () => santiagoLinkIdx, v => { santiagoLinkIdx = v; });
+  await crearLeadSantiago(req, res, 'Link Media', 'santiago-linkmedia');
 });
 
 // ========= Bot: actualización progresiva de leads (espejo de ALRA) =========
@@ -2127,7 +2179,6 @@ router.post('/bot-lead-update', async (req, res) => {
 //                  Romano 515, Forte 516, Medina 517, Soria 518
 // Header requerido: x-zapier-key: goldplan-trench-2026
 const TRENCH_ID = 507;
-let trenchIndex = 0;
 
 router.post('/zap-trench', async (req, res) => {
   try {
@@ -2152,10 +2203,17 @@ router.post('/zap-trench', async (req, res) => {
     let assigned_to = null;
     let vendedorNombre = '';
     let poolSize = 0;
+    const marcaFiltro = marcaDelLead(marca, modelo);
 
     try {
       const r = await dist.siguienteVendedor(TRENCH_ID, null, 'Alessio Formularios');
-      if (r.gestionado && r.userId) assigned_to = r.userId;
+      if (r.gestionado && r.userId) {
+        if (await aceptaMarca(r.userId, marcaFiltro)) {
+          assigned_to = r.userId;
+        } else {
+          console.log(`🏷️ [Zap Trench] ${r.userId} (por %) no recibe "${marcaFiltro}" → rueda filtrada`);
+        }
+      }
     } catch (e) {
       console.error('[Zap Trench] Distribucion fallo, uso rotacion:', e.message);
     }
@@ -2165,8 +2223,7 @@ router.post('/zap-trench', async (req, res) => {
       if (vendedores.length === 0) {
         return res.status(500).json({ error: 'No hay vendedores activos en el equipo de Jose Luis Trench' });
       }
-      const vendedor = vendedores[trenchIndex % vendedores.length];
-      trenchIndex = (trenchIndex + 1) % vendedores.length;
+      const vendedor = await siguienteEnRueda('zap-trench', vendedores, marcaFiltro, { fallbackId: TRENCH_ID });
       assigned_to = vendedor.id;
       vendedorNombre = vendedor.name;
       poolSize = vendedores.length;
