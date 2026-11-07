@@ -2277,4 +2277,108 @@ router.post('/zap-trench', async (req, res) => {
 });
 
 
+// ========= Fast Leads → Sebastian Ricci (576) =========
+// Reparte en todo el árbol de Ricci (CTE recursivo, recibe_leads = 1).
+// Si el equipo está en distribucion_equipos usa los %; si no, rueda pareja
+// con el filtro de "Marcas por vendedor". Si nadie del equipo puede recibirlo,
+// queda en Ricci para no perder el lead.
+// Si el teléfono ya entró en los últimos 30 días no crea otro lead.
+// Header requerido: x-sheet-key: goldplan-fastleads-ricci-2026
+const RICCI_ID = 576;
+const RICCI_MARCA_DEFAULT = 'vw'; // marca que se guarda si no viene ni se detecta por el modelo
+const DIAS_DUPLICADO_SHEETS = 30;
+
+async function buscarLeadDuplicado(telefono) {
+  const digitos = String(telefono || '').replace(/\D/g, '');
+  if (digitos.length < 8) return null;
+  const [rows] = await pool.execute(
+    `SELECT id, assigned_to FROM leads
+     WHERE REGEXP_REPLACE(telefono, '[^0-9]', '') LIKE ?
+       AND created_at >= DATE_SUB(NOW(), INTERVAL ${DIAS_DUPLICADO_SHEETS} DAY)
+     ORDER BY id DESC LIMIT 1`,
+    [`%${digitos.slice(-10)}`]
+  );
+  return rows[0] || null;
+}
+
+router.post('/sheets-fastleads-ricci', async (req, res) => {
+  try {
+    if (req.headers['x-sheet-key'] !== 'goldplan-fastleads-ricci-2026') {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const body = req.body || {};
+    const nombre    = String(body.nombre || '').trim();
+    const telefono  = normalizePhone(String(body.telefono || '').replace(/^p:/i, ''));
+    const modelo    = String(body.modelo || '').trim();
+    const email     = String(body.email || '').trim();
+    const formaPago = String(body.formaPago || '').trim();
+    const localidad = String(body.localidad || '').trim();
+    const extras    = String(body.notas || '').trim();
+
+    console.log('[FASTLEADS Ricci] Recibido:', JSON.stringify(body));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    const dup = await buscarLeadDuplicado(telefono);
+    if (dup) {
+      console.log(`[FASTLEADS Ricci] Duplicado ${telefono} -> lead #${dup.id}`);
+      return res.json({ ok: true, duplicado: true, leadId: dup.id, assignedTo: dup.assigned_to, fuente: 'Fast Leads' });
+    }
+
+    const marcaFiltro = marcaDelLead(body.marca, modelo);
+    const assigned_to = (await assignVendorInTeam(RICCI_ID, null, 'Fast Leads', marcaFiltro)) || RICCI_ID;
+
+    const [[u]] = await pool.execute('SELECT name FROM users WHERE id = ?', [assigned_to]);
+    const vendedorNombre = u ? u.name : String(assigned_to);
+
+    const notasFinal = [
+      email     ? 'Mail: ' + email : '',
+      localidad ? 'Localidad: ' + localidad : '',
+      extras
+    ].filter(Boolean).join(' | ');
+
+    const mf = String(marcaFiltro || '').toLowerCase();
+    const marcaFinal = MARCAS_VALIDAS.includes(mf)
+      ? mf
+      : (detectMarca(body.marca) || detectMarca(modelo) || RICCI_MARCA_DEFAULT);
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at)
+       VALUES
+         (?, ?, ?, ?, ?, 'nuevo', 'Fast Leads', ?, ?, NOW())`,
+      [nombre, telefono, modelo || 'Consultar', marcaFinal, formaPago || 'Consultar', notasFinal, assigned_to]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const lead = leadRows[0] || null;
+
+    const io = req.app.get('io');
+    if (io && lead) io.emit('lead:created', lead);
+
+    console.log(`[FASTLEADS Ricci] Lead #${result.insertId} -> ${vendedorNombre} (${assigned_to})`);
+
+    res.json({
+      ok: true,
+      duplicado: false,
+      lead,
+      leadId: result.insertId,
+      assignedTo: assigned_to,
+      vendedor: vendedorNombre,
+      equipo: 'Ricci',
+      fuente: 'Fast Leads'
+    });
+  } catch (error) {
+    console.error('[FASTLEADS Ricci] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+
 module.exports = router;
