@@ -145,6 +145,14 @@ app.use('/api/whatsapp', whatsappRouter(pool)); // ← WhatsApp Chat
 app.use('/api/distribution', require('./routes/distribution')); // ← Distribución de leads
 app.use('/api/calls', require('./routes/calls')); // ← Registro de llamadas
 app.use('/api/owner/marcas-vendedores', require('./routes/ownerMarcas')); // ← Marcas por vendedor (solo owner)
+{
+  // ← Integraciones externas (Emanuel, etc.): endpoint con API key + panel solo owner
+  const { authenticateToken, requireRole } = require('./middleware/auth');
+  app.use('/api/integraciones', require('./routes/integraciones')({
+    pool,
+    requireAdmin: [authenticateToken, requireRole(['owner', 'dueño'])],
+  }));
+}
 if (usersRouter) app.use('/api/users', usersRouter);
 
 // Health check

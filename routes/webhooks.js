@@ -2382,3 +2382,7 @@ router.post('/sheets-fastleads-ricci', async (req, res) => {
 
 
 module.exports = router;
+// Helpers expuestos para otros módulos (ej: routes/integraciones.js)
+module.exports.assignVendorInTeam = assignVendorInTeam;
+module.exports.marcaDelLead = marcaDelLead;
+module.exports.detectMarca = detectMarca;
